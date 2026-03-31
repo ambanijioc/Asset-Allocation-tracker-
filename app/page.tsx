@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { Plus, Search, Trash2, RefreshCw, TrendingUp, TrendingDown, DollarSign, PieChart as PieChartIcon, BarChart3, List, MessageCircle, Settings, X, Send, Bot } from 'lucide-react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RechartsTooltip, Legend } from 'recharts';
 import { v4 as uuidv4 } from 'uuid';
-import { GoogleGenAI, Type } from '@google/genai';
+import { GoogleGenAI, Type, ThinkingLevel } from '@google/genai';
 
 type Asset = {
   id: string;
@@ -27,6 +27,7 @@ type PriceData = {
 type ChatMessage = {
   role: string;
   content: string | null;
+  thought?: string;
   tool_calls?: any[];
   tool_call_id?: string;
   name?: string;
@@ -59,7 +60,7 @@ export default function Dashboard() {
   const [aiProvider, setAiProvider] = useState<'openrouter' | 'google'>('openrouter');
   const [availableModels, setAvailableModels] = useState<any[]>([]);
   const [selectedModel, setSelectedModel] = useState('openrouter/free');
-  const [googleModel, setGoogleModel] = useState('gemini-3.1-flash-preview');
+  const [googleModel, setGoogleModel] = useState('gemini-3.1-flash-lite-preview');
 
   useEffect(() => {
     const savedAssets = localStorage.getItem('portfolio_assets');
@@ -80,7 +81,13 @@ export default function Dashboard() {
 
     const savedGoogleModel = localStorage.getItem('google_model');
     if (savedGoogleModel) {
-      setGoogleModel(savedGoogleModel);
+      const validModels = ['gemini-3.1-flash-lite-preview', 'gemini-3.1-pro-preview', 'gemini-flash-latest'];
+      if (validModels.includes(savedGoogleModel)) {
+        setGoogleModel(savedGoogleModel);
+      } else {
+        setGoogleModel('gemini-3.1-flash-lite-preview');
+        localStorage.setItem('google_model', 'gemini-3.1-flash-lite-preview');
+      }
     }
 
     const savedModel = localStorage.getItem('openrouter_model');
@@ -245,38 +252,69 @@ export default function Dashboard() {
 
   const callOpenRouter = async (messages: any[], tools: any[]) => {
     if (aiProvider === 'google') {
-      const ai = new GoogleGenAI({ apiKey: process.env.NEXT_PUBLIC_GEMINI_API_KEY });
+      const apiKey = process.env.NEXT_PUBLIC_GEMINI_API_KEY;
+      if (!apiKey) {
+        throw new Error('Gemini API key is not available in this environment. Please try using OpenRouter instead.');
+      }
+      const ai = new GoogleGenAI({ apiKey });
       
       const systemPrompt = messages.find(m => m.role === 'system')?.content;
       
-      const geminiMessages = messages.filter(m => m.role !== 'system').map(m => {
+      const geminiMessages: any[] = [];
+      let lastGeminiMessage: any = null;
+
+      for (const m of messages.filter(m => m.role !== 'system')) {
         if (m.role === 'tool') {
-          return {
-            role: 'user',
-            parts: [{
-              functionResponse: {
-                name: m.name,
-                response: { result: m.content }
-              }
-            }]
+          const functionResponse = {
+            functionResponse: {
+              name: m.name,
+              response: { result: m.content }
+            }
           };
+
+          if (lastGeminiMessage && lastGeminiMessage.role === 'user' && lastGeminiMessage.parts.some((p: any) => p.functionResponse)) {
+            lastGeminiMessage.parts.push(functionResponse);
+            continue;
+          } else {
+            const newMessage = {
+              role: 'user',
+              parts: [functionResponse]
+            };
+            geminiMessages.push(newMessage);
+            lastGeminiMessage = newMessage;
+            continue;
+          }
         }
+
+        const parts: any[] = [];
+        // Always include thought if it exists, even if empty, as it acts as a signature for Gemini 3
+        if (m.thought !== undefined && m.thought !== null) {
+          parts.push({ thought: m.thought });
+        }
+        
         if (m.tool_calls) {
-          return {
-            role: 'model',
-            parts: m.tool_calls.map((tc: any) => ({
-              functionCall: {
-                name: tc.function.name,
-                args: typeof tc.function.arguments === 'string' ? JSON.parse(tc.function.arguments) : tc.function.arguments
-              }
-            }))
-          };
+          parts.push(...m.tool_calls.map((tc: any) => ({
+            functionCall: {
+              name: tc.function.name,
+              args: typeof tc.function.arguments === 'string' ? JSON.parse(tc.function.arguments) : tc.function.arguments
+            }
+          })));
+        } else if (m.content && m.content.trim()) {
+          parts.push({ text: m.content });
         }
-        return {
+
+        // Ensure at least one part is present for user/model turns
+        if (parts.length === 0) {
+          parts.push({ text: m.content || '' });
+        }
+
+        const newMessage = {
           role: m.role === 'user' ? 'user' : 'model',
-          parts: [{ text: m.content || '' }]
+          parts
         };
-      });
+        geminiMessages.push(newMessage);
+        lastGeminiMessage = newMessage;
+      }
 
       const geminiTools = tools ? [{
         functionDeclarations: tools.map((t: any) => ({
@@ -295,15 +333,21 @@ export default function Dashboard() {
         }))
       }] : undefined;
 
+      const isGemini3 = googleModel.includes('gemini-3');
+      const thinkingLevel = isGemini3 ? (googleModel.includes('pro') ? ThinkingLevel.LOW : ThinkingLevel.MINIMAL) : undefined;
+
       const response = await ai.models.generateContent({
         model: googleModel,
         contents: geminiMessages,
         config: {
           systemInstruction: systemPrompt,
-          tools: geminiTools
+          tools: geminiTools,
+          thinkingConfig: thinkingLevel ? { thinkingLevel } : undefined
         }
       });
 
+      const thought = response.candidates?.[0]?.content?.parts?.find((p: any) => p.thought)?.thought;
+      const text = response.candidates?.[0]?.content?.parts?.find((p: any) => p.text)?.text || '';
       const functionCalls = response.functionCalls;
       if (functionCalls && functionCalls.length > 0) {
         return {
@@ -311,7 +355,8 @@ export default function Dashboard() {
           choices: [{
             message: {
               role: 'assistant',
-              content: null,
+              content: text || null,
+              thought: thought,
               tool_calls: functionCalls.map((fc: any) => ({
                 id: uuidv4(),
                 type: 'function',
@@ -330,7 +375,8 @@ export default function Dashboard() {
         choices: [{
           message: {
             role: 'assistant',
-            content: response.text
+            content: text,
+            thought: thought
           }
         }]
       };
@@ -353,8 +399,8 @@ export default function Dashboard() {
       let errorMessage = err.error?.message || 'Failed to call OpenRouter';
       if (errorMessage.includes('guardrail restrictions and data policy')) {
         errorMessage = 'The selected free model requires data logging. Please either enable data collection at https://openrouter.ai/settings/privacy or select a different model.';
-      } else if (errorMessage.includes('requires more credits')) {
-        errorMessage = 'This model requires paid credits. Please select a free model from the settings, or add credits to your OpenRouter account.';
+      } else if (errorMessage.includes('requires more credits') || errorMessage.includes('429') || errorMessage.includes('rate limit')) {
+        errorMessage = 'You have reached the free limit for this model. Please try switching to a different provider (e.g., Google Gemini) in the settings, or add credits to your OpenRouter account.';
       } else if (errorMessage.includes('Provider returned error') || errorMessage.includes('upstream error')) {
         errorMessage = 'The selected AI model is currently experiencing issues or is unavailable. Please select a different model in the settings.';
       }
@@ -426,8 +472,10 @@ export default function Dashboard() {
       let message = response.choices[0].message;
 
       if (message.tool_calls) {
-        currentMessages.push(message);
+        const toolCallMessage = { ...message, role: 'assistant', model: response.model };
+        currentMessages.push(toolCallMessage);
         
+        const toolResponses: ChatMessage[] = [];
         for (const toolCall of message.tool_calls) {
           let args;
           try {
@@ -435,7 +483,7 @@ export default function Dashboard() {
               ? JSON.parse(toolCall.function.arguments) 
               : toolCall.function.arguments;
           } catch (e: any) {
-            currentMessages.push({
+            toolResponses.push({
               role: 'tool',
               tool_call_id: toolCall.id,
               name: toolCall.function.name,
@@ -465,14 +513,14 @@ export default function Dashboard() {
                 return updated;
               });
               
-              currentMessages.push({
+              toolResponses.push({
                 role: 'tool',
                 tool_call_id: toolCall.id,
                 name: toolCall.function.name,
                 content: `Successfully added ${newAsset.name} (${newAsset.symbol}) to the portfolio.`
               });
             } else {
-              currentMessages.push({
+              toolResponses.push({
                 role: 'tool',
                 tool_call_id: toolCall.id,
                 name: toolCall.function.name,
@@ -485,14 +533,24 @@ export default function Dashboard() {
               localStorage.setItem('portfolio_assets', JSON.stringify(updated));
               return updated;
             });
-            currentMessages.push({
+            toolResponses.push({
               role: 'tool',
               tool_call_id: toolCall.id,
               name: toolCall.function.name,
               content: `Successfully removed ${args.symbol} from the portfolio.`
             });
+          } else {
+            toolResponses.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              name: toolCall.function.name,
+              content: `Unknown tool: ${toolCall.function.name}`
+            });
           }
         }
+
+        currentMessages.push(...toolResponses);
+        setChatMessages(prev => [...prev, toolCallMessage, ...toolResponses]);
         
         response = await callOpenRouter([systemPrompt, ...currentMessages], tools);
         if (!response.choices || response.choices.length === 0) {
@@ -501,8 +559,13 @@ export default function Dashboard() {
         message = response.choices[0].message;
       }
 
-      if (message.content) {
-        setChatMessages(prev => [...prev, { role: 'assistant', content: message.content, model: response.model }]);
+      if (message.content || message.thought) {
+        setChatMessages(prev => [...prev, { 
+          role: 'assistant', 
+          content: message.content, 
+          thought: message.thought,
+          model: response.model 
+        }]);
       }
     } catch (error: any) {
       console.error("AI Error:", error);
@@ -1127,7 +1190,7 @@ export default function Dashboard() {
                       )}
                     </div>
                     <p className="text-xs text-zinc-500 mt-2">
-                      Select a free model from the list or choose "Custom Model..." to type any OpenRouter model ID.
+                      Select a free model from the list or choose &quot;Custom Model...&quot; to type any OpenRouter model ID.
                     </p>
                   </div>
                 </>
@@ -1144,9 +1207,9 @@ export default function Dashboard() {
                     }}
                     className="w-full px-4 py-2.5 border border-zinc-300 dark:border-zinc-700 rounded-xl bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 focus:ring-2 focus:ring-blue-500 outline-none transition-shadow appearance-none"
                   >
-                    <option value="gemini-3.1-flash-preview">Gemini 3.1 Flash (Fast & Capable)</option>
+                    <option value="gemini-3.1-flash-lite-preview">Gemini 3.1 Flash Lite (Fast & Efficient)</option>
                     <option value="gemini-3.1-pro-preview">Gemini 3.1 Pro (Advanced Reasoning)</option>
-                    <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
+                    <option value="gemini-flash-latest">Gemini Flash (Legacy Stable)</option>
                   </select>
                   <p className="text-xs text-zinc-500 mt-2">
                     Uses the built-in Gemini API key provided by the platform.
