@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: portfolio-tracker
+    env: node
+    buildCommand: npm install && npm run build
+    startCommand: npm run start
+    envVars:
+      - key: PORT
+        value: 10000
+      - key: NODE_VERSION
+        value: 20.x
+      - key: MONGODB_URI
+        sync: false
+      - key: NEXT_PUBLIC_GEMINI_API_KEY
+        sync: false

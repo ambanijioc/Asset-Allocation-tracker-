@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Plus, Search, Trash2, RefreshCw, TrendingUp, TrendingDown, DollarSign, PieChart as PieChartIcon, BarChart3, List, MessageCircle, Settings, X, Send, Bot } from 'lucide-react';
+import { Plus, Search, Trash2, RefreshCw, TrendingUp, TrendingDown, DollarSign, PieChart as PieChartIcon, BarChart3, List, MessageCircle, Settings, X, Send, Bot, ArrowUp, MessageSquarePlus } from 'lucide-react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RechartsTooltip, Legend } from 'recharts';
 import { v4 as uuidv4 } from 'uuid';
 import { GoogleGenAI, Type, ThinkingLevel } from '@google/genai';
@@ -13,6 +13,7 @@ type Asset = {
   quantity: number;
   entryPrice: number;
   type: string;
+  categoryPath?: string[];
 };
 
 type PriceData = {
@@ -28,6 +29,7 @@ type ChatMessage = {
   role: string;
   content: string | null;
   thought?: string;
+  thoughtSignature?: string;
   tool_calls?: any[];
   tool_call_id?: string;
   name?: string;
@@ -62,43 +64,74 @@ export default function Dashboard() {
   const [selectedModel, setSelectedModel] = useState('openrouter/free');
   const [googleModel, setGoogleModel] = useState('gemini-3.1-flash-lite-preview');
 
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const chatContainerRef = useRef<HTMLDivElement>(null);
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
   useEffect(() => {
-    const savedAssets = localStorage.getItem('portfolio_assets');
-    if (savedAssets) {
+    if (isChatOpen) {
+      scrollToBottom();
+    }
+  }, [chatMessages, isAiTyping, isChatOpen]);
+
+  const scrollToTop = () => {
+    chatContainerRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const startNewChat = () => {
+    setChatMessages([{ role: 'assistant', content: 'Hi! I can help you manage your portfolio. Try saying "Add 10 shares of Apple at $150" or "Remove Reliance".' }]);
+  };
+
+  const syncToDb = async (updates: any) => {
+    try {
+      await fetch('/api/portfolio', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updates)
+      });
+    } catch (e) {
+      console.error('Failed to sync to DB', e);
+    }
+  };
+
+  useEffect(() => {
+    const loadData = async () => {
       try {
-        setAssets(JSON.parse(savedAssets));
+        const res = await fetch('/api/portfolio');
+        if (res.ok) {
+          const data = await res.json();
+          if (data.assets) setAssets(data.assets);
+          if (data.fundHoldings) setFundHoldings(data.fundHoldings);
+          if (data.settings) {
+            if (data.settings.openRouterKey) setOpenRouterKey(data.settings.openRouterKey);
+            if (data.settings.aiProvider) setAiProvider(data.settings.aiProvider);
+            if (data.settings.googleModel) {
+              const validModels = ['gemini-3.1-flash-lite-preview', 'gemini-3.1-pro-preview', 'gemini-flash-latest'];
+              if (validModels.includes(data.settings.googleModel)) {
+                setGoogleModel(data.settings.googleModel);
+              } else {
+                setGoogleModel('gemini-3.1-flash-lite-preview');
+                syncToDb({ settings: { googleModel: 'gemini-3.1-flash-lite-preview' } });
+              }
+            }
+            if (data.settings.openrouterModel) {
+              if (data.settings.openrouterModel === 'google/gemini-2.5-flash:free') {
+                setSelectedModel('openrouter/free');
+                syncToDb({ settings: { openrouterModel: 'openrouter/free' } });
+              } else {
+                setSelectedModel(data.settings.openrouterModel);
+              }
+            }
+          }
+        }
       } catch (e) {
-        console.error('Failed to parse saved assets', e);
+        console.error('Failed to load data from DB', e);
       }
-    }
-    const savedKey = localStorage.getItem('openrouter_key');
-    if (savedKey) setOpenRouterKey(savedKey);
-
-    const savedProvider = localStorage.getItem('ai_provider');
-    if (savedProvider === 'google' || savedProvider === 'openrouter') {
-      setAiProvider(savedProvider);
-    }
-
-    const savedGoogleModel = localStorage.getItem('google_model');
-    if (savedGoogleModel) {
-      const validModels = ['gemini-3.1-flash-lite-preview', 'gemini-3.1-pro-preview', 'gemini-flash-latest'];
-      if (validModels.includes(savedGoogleModel)) {
-        setGoogleModel(savedGoogleModel);
-      } else {
-        setGoogleModel('gemini-3.1-flash-lite-preview');
-        localStorage.setItem('google_model', 'gemini-3.1-flash-lite-preview');
-      }
-    }
-
-    const savedModel = localStorage.getItem('openrouter_model');
-    if (savedModel) {
-      if (savedModel === 'google/gemini-2.5-flash:free') {
-        setSelectedModel('openrouter/free');
-        localStorage.setItem('openrouter_model', 'openrouter/free');
-      } else {
-        setSelectedModel(savedModel);
-      }
-    }
+    };
+    loadData();
 
     // Fetch available free models
     fetch('/api/models')
@@ -125,7 +158,11 @@ export default function Dashboard() {
           .then(res => res.json())
           .then(data => {
             if (data.holdings && data.holdings.length > 0) {
-              setFundHoldings(prev => ({ ...prev, [asset.symbol]: data.holdings }));
+              setFundHoldings(prev => {
+                const updated = { ...prev, [asset.symbol]: data.holdings };
+                syncToDb({ fundHoldings: updated });
+                return updated;
+              });
             }
           })
           .catch(console.error);
@@ -224,7 +261,7 @@ export default function Dashboard() {
 
     const newAssets = [...assets, newAsset];
     setAssets(newAssets);
-    localStorage.setItem('portfolio_assets', JSON.stringify(newAssets));
+    syncToDb({ assets: newAssets });
     
     setIsAddModalOpen(false);
     resetForm();
@@ -233,7 +270,7 @@ export default function Dashboard() {
   const handleDeleteAsset = (id: string) => {
     const newAssets = assets.filter(a => a.id !== id);
     setAssets(newAssets);
-    localStorage.setItem('portfolio_assets', JSON.stringify(newAssets));
+    syncToDb({ assets: newAssets });
   };
 
   const resetForm = () => {
@@ -246,7 +283,7 @@ export default function Dashboard() {
 
   const saveOpenRouterKey = (key: string) => {
     setOpenRouterKey(key);
-    localStorage.setItem('openrouter_key', key);
+    syncToDb({ settings: { openRouterKey: key } });
     setIsSettingsOpen(false);
   };
 
@@ -288,10 +325,20 @@ export default function Dashboard() {
 
         const parts: any[] = [];
         // Always include thought if it exists, even if empty, as it acts as a signature for Gemini 3
-        if (m.thought !== undefined && m.thought !== null) {
-          parts.push({ thought: m.thought });
+        if (m.thought !== undefined || m.thoughtSignature !== undefined) {
+          const thoughtPart: any = { thought: true };
+          // The API expects the thoughtSignature to be passed back in history.
+          // We do not need to pass the actual thought text back.
+          if (m.thoughtSignature !== undefined) {
+            thoughtPart.thoughtSignature = m.thoughtSignature;
+          }
+          parts.push(thoughtPart);
         }
         
+        if (m.content && m.content.trim()) {
+          parts.push({ text: m.content });
+        }
+
         if (m.tool_calls) {
           parts.push(...m.tool_calls.map((tc: any) => ({
             functionCall: {
@@ -299,12 +346,12 @@ export default function Dashboard() {
               args: typeof tc.function.arguments === 'string' ? JSON.parse(tc.function.arguments) : tc.function.arguments
             }
           })));
-        } else if (m.content && m.content.trim()) {
-          parts.push({ text: m.content });
         }
 
         // Ensure at least one part is present for user/model turns
-        if (parts.length === 0) {
+        // For model turns with thought, the thought part itself might satisfy the requirement, 
+        // but it's safer to have a text part if no tool calls are present.
+        if (parts.length === 0 || (parts.length === 1 && parts[0].thought === true && m.role !== 'user' && !m.tool_calls)) {
           parts.push({ text: m.content || '' });
         }
 
@@ -316,38 +363,70 @@ export default function Dashboard() {
         lastGeminiMessage = newMessage;
       }
 
-      const geminiTools = tools ? [{
-        functionDeclarations: tools.map((t: any) => ({
-          name: t.function.name,
-          description: t.function.description,
-          parameters: {
+      const mapSchema = (schema: any): any => {
+        if (schema.type === 'object') {
+          return {
             type: Type.OBJECT,
-            properties: Object.fromEntries(
-              Object.entries(t.function.parameters.properties).map(([k, v]: [string, any]) => [
-                k,
-                { type: v.type === 'number' ? Type.NUMBER : Type.STRING, description: v.description }
-              ])
-            ),
-            required: t.function.parameters.required
-          }
-        }))
-      }] : undefined;
+            description: schema.description,
+            properties: schema.properties ? Object.fromEntries(
+              Object.entries(schema.properties).map(([k, v]) => [k, mapSchema(v)])
+            ) : undefined,
+            required: schema.required
+          };
+        } else if (schema.type === 'array') {
+          return {
+            type: Type.ARRAY,
+            description: schema.description,
+            items: schema.items ? mapSchema(schema.items) : undefined
+          };
+        } else if (schema.type === 'number') {
+          return { type: Type.NUMBER, description: schema.description };
+        } else if (schema.type === 'boolean') {
+          return { type: Type.BOOLEAN, description: schema.description };
+        } else {
+          return { type: Type.STRING, description: schema.description };
+        }
+      };
 
+      const geminiTools: any[] = tools ? [{
+        functionDeclarations: tools.map((t: any) => {
+          const hasProperties = Object.keys(t.function.parameters?.properties || {}).length > 0;
+          const declaration: any = {
+            name: t.function.name,
+            description: t.function.description,
+          };
+          if (hasProperties) {
+            declaration.parameters = mapSchema(t.function.parameters);
+          }
+          return declaration;
+        })
+      }] : [];
+      
+      geminiTools.push({ googleSearch: {} });
+
+      const isPro = googleModel.includes('pro');
       const isGemini3 = googleModel.includes('gemini-3');
-      const thinkingLevel = isGemini3 ? (googleModel.includes('pro') ? ThinkingLevel.LOW : ThinkingLevel.MINIMAL) : undefined;
+      // For Gemini 3 models, use LOW for Pro to ensure reasoning while keeping latency down,
+      // and MINIMAL for Flash Lite to minimize latency (it's the default anyway).
+      const thinkingLevel = isGemini3 ? (isPro ? ThinkingLevel.LOW : ThinkingLevel.MINIMAL) : undefined;
+
+      console.log('Gemini Messages being sent:', JSON.stringify(geminiMessages, null, 2));
 
       const response = await ai.models.generateContent({
         model: googleModel,
         contents: geminiMessages,
         config: {
           systemInstruction: systemPrompt,
-          tools: geminiTools,
+          tools: geminiTools.length > 0 ? geminiTools : undefined,
+          toolConfig: { includeServerSideToolInvocations: true },
           thinkingConfig: thinkingLevel ? { thinkingLevel } : undefined
         }
       });
 
-      const thought = response.candidates?.[0]?.content?.parts?.find((p: any) => p.thought)?.thought;
-      const text = response.candidates?.[0]?.content?.parts?.find((p: any) => p.text)?.text || '';
+      const thoughtPart = response.candidates?.[0]?.content?.parts?.find((p: any) => p.thought === true);
+      const thoughtText = thoughtPart?.text;
+      const thoughtSignature = thoughtPart?.thoughtSignature;
+      const text = response.candidates?.[0]?.content?.parts?.find((p: any) => p.text && p.thought !== true)?.text || '';
       const functionCalls = response.functionCalls;
       if (functionCalls && functionCalls.length > 0) {
         return {
@@ -356,7 +435,8 @@ export default function Dashboard() {
             message: {
               role: 'assistant',
               content: text || null,
-              thought: thought,
+              thought: thoughtText,
+              thoughtSignature: thoughtSignature,
               tool_calls: functionCalls.map((fc: any) => ({
                 id: uuidv4(),
                 type: 'function',
@@ -376,7 +456,8 @@ export default function Dashboard() {
           message: {
             role: 'assistant',
             content: text,
-            thought: thought
+            thought: thoughtText,
+            thoughtSignature: thoughtSignature
           }
         }]
       };
@@ -453,6 +534,142 @@ export default function Dashboard() {
             required: ['symbol']
           }
         }
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'update_asset',
+          description: 'Update the quantity or entry price of an existing asset in the portfolio.',
+          parameters: {
+            type: 'object',
+            properties: {
+              symbol: { type: 'string', description: 'The exact symbol of the asset to update (e.g. "AAPL")' },
+              quantity: { type: 'number', description: 'The new total quantity of units/shares' },
+              entryPrice: { type: 'number', description: 'The new average purchase price per unit' }
+            },
+            required: ['symbol']
+          }
+        }
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'clear_portfolio',
+          description: 'Remove all assets from the portfolio.',
+          parameters: {
+            type: 'object',
+            properties: {},
+            required: []
+          }
+        }
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'refresh_prices',
+          description: 'Refresh the current market prices for all assets in the portfolio.',
+          parameters: {
+            type: 'object',
+            properties: {},
+            required: []
+          }
+        }
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'search_asset',
+          description: 'Search for an asset to get its symbol and current price information.',
+          parameters: {
+            type: 'object',
+            properties: {
+              query: { type: 'string', description: 'The name or symbol to search for' }
+            },
+            required: ['query']
+          }
+        }
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'open_add_modal',
+          description: 'Open the manual add asset dialog/modal for the user.',
+          parameters: {
+            type: 'object',
+            properties: {},
+            required: []
+          }
+        }
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'close_add_modal',
+          description: 'Close the manual add asset dialog/modal.',
+          parameters: {
+            type: 'object',
+            properties: {},
+            required: []
+          }
+        }
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'update_asset_category',
+          description: 'Update the hierarchical category path of an asset. You can use the standard taxonomy or create new subcategories as needed.',
+          parameters: {
+            type: 'object',
+            properties: {
+              symbol: { type: 'string', description: 'The exact symbol of the asset to update' },
+              categoryPath: {
+                type: 'array',
+                description: 'The hierarchical path of categories, e.g., ["Equities", "Domestic", "Large-Cap"] or ["Alternatives", "Cryptocurrency"]',
+                items: { type: 'string' }
+              }
+            },
+            required: ['symbol', 'categoryPath']
+          }
+        }
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'update_fund_holdings',
+          description: 'Update the underlying stock exposure/holdings for a specific mutual fund or ETF. Use this to manually set the holdings after analyzing a fund from the web.',
+          parameters: {
+            type: 'object',
+            properties: {
+              symbol: { type: 'string', description: 'The exact symbol of the mutual fund or ETF in the portfolio' },
+              holdings: {
+                type: 'array',
+                description: 'List of underlying holdings',
+                items: {
+                  type: 'object',
+                  properties: {
+                    symbol: { type: 'string', description: 'The underlying stock symbol (e.g. "RELIANCE.NS")' },
+                    holdingName: { type: 'string', description: 'The name of the company' },
+                    holdingPercent: { type: 'number', description: 'Percentage weight in the fund (0.0 to 1.0, e.g. 0.075 for 7.5%)' }
+                  },
+                  required: ['symbol', 'holdingName', 'holdingPercent']
+                }
+              }
+            },
+            required: ['symbol', 'holdings']
+          }
+        }
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'close_chat',
+          description: 'Close the AI chat window.',
+          parameters: {
+            type: 'object',
+            properties: {},
+            required: []
+          }
+        }
       }
     ];
 
@@ -460,8 +677,17 @@ export default function Dashboard() {
       let currentMessages = [...newMessages];
       const systemPrompt = { 
         role: 'system', 
-        content: `You are a helpful portfolio management assistant. You can help users add or remove assets from their portfolio using the provided tools. 
+        content: `You are a helpful portfolio management assistant. You can help users manage their portfolio using the provided tools. 
         If the user does not provide a price or quantity when adding, ask them for it before calling the tool. 
+        You can search the web to analyze mutual funds and update their underlying stock exposure using the update_fund_holdings tool.
+        When updating a mutual fund's holdings, match its holdings with the user's current direct assets. List the specific stocks that the user already owns directly. For all other stocks in the fund, group their exposure percentages into 'Large Cap', 'Mid Cap', or 'Small Cap' buckets (use symbol 'LARGE_CAP', 'MID_CAP', or 'SMALL_CAP' and holdingName 'Other Large Cap', 'Other Mid Cap', or 'Other Small Cap').
+        CRITICAL: DO NOT ask the user for the percentage weights of ETF or mutual fund holdings. If you cannot find the exact percentages on the web, make your best educated estimate based on the fund's category, benchmark, top holdings, or investment objective. For example, if it's a Large Cap fund, allocate the majority to 'Large Cap'.
+        
+        TAXONOMY & CATEGORIZATION:
+        We use a hierarchical taxonomy for assets (e.g., ["Equities", "Domestic", "Large-Cap"]). 
+        Standard top-level categories include: Equities, Fixed Income, Commodities, Real Estate, Cash & Equivalents, Alternatives.
+        You can use the update_asset_category tool to classify assets. You are free to invent new subcategories or sub-subcategories if the asset requires it (e.g., ["Alternatives", "Cryptocurrency", "DeFi Tokens"]).
+        
         Current portfolio symbols: ${assets.map(a => a.symbol).join(', ')}` 
       };
       
@@ -509,7 +735,7 @@ export default function Dashboard() {
               
               setAssets(prev => {
                 const updated = [...prev, newAsset];
-                localStorage.setItem('portfolio_assets', JSON.stringify(updated));
+                syncToDb({ assets: updated });
                 return updated;
               });
               
@@ -530,7 +756,7 @@ export default function Dashboard() {
           } else if (toolCall.function.name === 'remove_asset') {
             setAssets(prev => {
               const updated = prev.filter(a => a.symbol.toLowerCase() !== (args.symbol || '').toLowerCase());
-              localStorage.setItem('portfolio_assets', JSON.stringify(updated));
+              syncToDb({ assets: updated });
               return updated;
             });
             toolResponses.push({
@@ -538,6 +764,110 @@ export default function Dashboard() {
               tool_call_id: toolCall.id,
               name: toolCall.function.name,
               content: `Successfully removed ${args.symbol} from the portfolio.`
+            });
+          } else if (toolCall.function.name === 'update_asset') {
+            let updatedAsset = false;
+            setAssets(prev => {
+              const updated = prev.map(a => {
+                if (a.symbol.toLowerCase() === (args.symbol || '').toLowerCase()) {
+                  updatedAsset = true;
+                  return {
+                    ...a,
+                    quantity: args.quantity !== undefined ? args.quantity : a.quantity,
+                    entryPrice: args.entryPrice !== undefined ? args.entryPrice : a.entryPrice
+                  };
+                }
+                return a;
+              });
+              syncToDb({ assets: updated });
+              return updated;
+            });
+            toolResponses.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              name: toolCall.function.name,
+              content: updatedAsset ? `Successfully updated ${args.symbol}.` : `Asset ${args.symbol} not found in portfolio.`
+            });
+          } else if (toolCall.function.name === 'update_asset_category') {
+            let updatedAsset = false;
+            setAssets(prev => {
+              const updated = prev.map(a => {
+                if (a.symbol.toLowerCase() === (args.symbol || '').toLowerCase()) {
+                  updatedAsset = true;
+                  return { ...a, categoryPath: args.categoryPath };
+                }
+                return a;
+              });
+              syncToDb({ assets: updated });
+              return updated;
+            });
+            toolResponses.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              name: toolCall.function.name,
+              content: updatedAsset ? `Successfully updated category for ${args.symbol}.` : `Asset ${args.symbol} not found in portfolio.`
+            });
+          } else if (toolCall.function.name === 'update_fund_holdings') {
+            setFundHoldings(prev => {
+              const updated = { ...prev, [args.symbol]: args.holdings };
+              syncToDb({ fundHoldings: updated });
+              return updated;
+            });
+            toolResponses.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              name: toolCall.function.name,
+              content: `Successfully updated holdings for ${args.symbol}.`
+            });
+          } else if (toolCall.function.name === 'clear_portfolio') {
+            setAssets([]);
+            syncToDb({ assets: [] });
+            toolResponses.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              name: toolCall.function.name,
+              content: `Successfully cleared the portfolio.`
+            });
+          } else if (toolCall.function.name === 'refresh_prices') {
+            await fetchPrices();
+            toolResponses.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              name: toolCall.function.name,
+              content: `Successfully triggered a price refresh.`
+            });
+          } else if (toolCall.function.name === 'search_asset') {
+            const searchRes = await fetch(`/api/search?q=${encodeURIComponent(args.query || '')}`);
+            const searchData = await searchRes.json();
+            toolResponses.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              name: toolCall.function.name,
+              content: searchData && searchData.length > 0 ? JSON.stringify(searchData.slice(0, 3)) : `No results found for "${args.query}".`
+            });
+          } else if (toolCall.function.name === 'open_add_modal') {
+            setIsAddModalOpen(true);
+            toolResponses.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              name: toolCall.function.name,
+              content: `Successfully opened the add asset modal.`
+            });
+          } else if (toolCall.function.name === 'close_add_modal') {
+            setIsAddModalOpen(false);
+            toolResponses.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              name: toolCall.function.name,
+              content: `Successfully closed the add asset modal.`
+            });
+          } else if (toolCall.function.name === 'close_chat') {
+            setIsChatOpen(false);
+            toolResponses.push({
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              name: toolCall.function.name,
+              content: `Successfully closed the chat window.`
             });
           } else {
             toolResponses.push({
@@ -559,11 +889,12 @@ export default function Dashboard() {
         message = response.choices[0].message;
       }
 
-      if (message.content || message.thought) {
+      if (message.content !== null || message.thought !== undefined || message.tool_calls) {
         setChatMessages(prev => [...prev, { 
           role: 'assistant', 
-          content: message.content, 
+          content: message.content || '', 
           thought: message.thought,
+          thoughtSignature: message.thoughtSignature,
           model: response.model 
         }]);
       }
@@ -600,16 +931,28 @@ export default function Dashboard() {
   const totalProfitLoss = portfolioStats.currentValue - portfolioStats.investedValue;
   const totalProfitLossPercent = portfolioStats.investedValue > 0 ? (totalProfitLoss / portfolioStats.investedValue) * 100 : 0;
 
+  const normalizeCategory = (category: string) => {
+    if (!category) return 'Unknown';
+    const upper = category.toUpperCase();
+    if (upper === 'EQUITY') return 'Equities';
+    if (upper === 'MUTUALFUND') return 'Mutual Funds';
+    if (upper === 'CRYPTOCURRENCY') return 'Crypto';
+    return category;
+  };
+
   const allocationData = assets.reduce((acc: any[], asset) => {
     const priceData = prices[asset.symbol];
     const currentPrice = priceData ? getConvertedPrice(priceData.regularMarketPrice, priceData.currency) : asset.entryPrice;
     const value = currentPrice * asset.quantity;
     
-    const existingType = acc.find(item => item.name === asset.type);
+    const topCategoryRaw = asset.categoryPath && asset.categoryPath.length > 0 ? asset.categoryPath[0] : asset.type;
+    const topCategory = normalizeCategory(topCategoryRaw);
+    
+    const existingType = acc.find(item => item.name === topCategory);
     if (existingType) {
       existingType.value += value;
     } else {
-      acc.push({ name: asset.type, value });
+      acc.push({ name: topCategory, value });
     }
     return acc;
   }, []);
@@ -679,7 +1022,13 @@ export default function Dashboard() {
   };
 
   Object.values(underlyingExposure).forEach(exp => {
-    if ((exp.type === 'EQUITY' || exp.type === 'EQUITY') && exp.marketCap) {
+    if (exp.symbol === 'LARGE_CAP' || exp.name.toLowerCase().includes('large cap')) {
+      marketCapAllocation['Large Cap'] += exp.value;
+    } else if (exp.symbol === 'MID_CAP' || exp.name.toLowerCase().includes('mid cap')) {
+      marketCapAllocation['Mid Cap'] += exp.value;
+    } else if (exp.symbol === 'SMALL_CAP' || exp.name.toLowerCase().includes('small cap')) {
+      marketCapAllocation['Small Cap'] += exp.value;
+    } else if ((exp.type === 'EQUITY' || exp.type === 'EQUITY') && exp.marketCap) {
       const capInUsd = exp.currency === 'INR' ? exp.marketCap / usdToInr : exp.marketCap;
       if (capInUsd >= 10_000_000_000) marketCapAllocation['Large Cap'] += exp.value;
       else if (capInUsd >= 2_000_000_000) marketCapAllocation['Mid Cap'] += exp.value;
@@ -891,7 +1240,9 @@ export default function Dashboard() {
                         <tr key={asset.id} className="hover:bg-zinc-50 dark:hover:bg-zinc-800/50 transition-colors">
                           <td className="px-6 py-4">
                             <div className="font-medium text-zinc-900 dark:text-zinc-100">{asset.name}</div>
-                            <div className="text-xs text-zinc-500">{asset.symbol} &bull; {asset.type}</div>
+                            <div className="text-xs text-zinc-500 mt-1">
+                              {asset.symbol} &bull; {asset.categoryPath ? asset.categoryPath.join(' > ') : normalizeCategory(asset.type)}
+                            </div>
                           </td>
                           <td className="px-6 py-4 text-right font-medium">
                             {asset.quantity.toLocaleString('en-IN')}
@@ -1124,7 +1475,7 @@ export default function Dashboard() {
                   onChange={(e) => {
                     const val = e.target.value as 'openrouter' | 'google';
                     setAiProvider(val);
-                    localStorage.setItem('ai_provider', val);
+                    syncToDb({ settings: { aiProvider: val } });
                   }}
                   className="w-full px-4 py-2.5 border border-zinc-300 dark:border-zinc-700 rounded-xl bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 focus:ring-2 focus:ring-blue-500 outline-none transition-shadow appearance-none"
                 >
@@ -1160,10 +1511,10 @@ export default function Dashboard() {
                         onChange={(e) => {
                           if (e.target.value === 'custom') {
                             setSelectedModel('');
-                            localStorage.setItem('openrouter_model', '');
+                            syncToDb({ settings: { openrouterModel: '' } });
                           } else {
                             setSelectedModel(e.target.value);
-                            localStorage.setItem('openrouter_model', e.target.value);
+                            syncToDb({ settings: { openrouterModel: e.target.value } });
                           }
                         }}
                         className="w-full px-4 py-2.5 border border-zinc-300 dark:border-zinc-700 rounded-xl bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 focus:ring-2 focus:ring-blue-500 outline-none transition-shadow appearance-none"
@@ -1181,7 +1532,7 @@ export default function Dashboard() {
                           value={selectedModel}
                           onChange={(e) => {
                             setSelectedModel(e.target.value);
-                            localStorage.setItem('openrouter_model', e.target.value);
+                            syncToDb({ settings: { openrouterModel: e.target.value } });
                           }}
                           placeholder="e.g., anthropic/claude-3-opus"
                           className="w-full px-4 py-2.5 border border-zinc-300 dark:border-zinc-700 rounded-xl bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 focus:ring-2 focus:ring-blue-500 outline-none transition-shadow"
@@ -1203,7 +1554,7 @@ export default function Dashboard() {
                     value={googleModel}
                     onChange={(e) => {
                       setGoogleModel(e.target.value);
-                      localStorage.setItem('google_model', e.target.value);
+                      syncToDb({ settings: { googleModel: e.target.value } });
                     }}
                     className="w-full px-4 py-2.5 border border-zinc-300 dark:border-zinc-700 rounded-xl bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 focus:ring-2 focus:ring-blue-500 outline-none transition-shadow appearance-none"
                   >
@@ -1230,12 +1581,23 @@ export default function Dashboard() {
                 <Bot className="w-5 h-5" />
                 <h3 className="font-semibold">AI Assistant</h3>
               </div>
-              <button onClick={() => setIsChatOpen(false)} className="text-blue-100 hover:text-white transition-colors">
-                <X className="w-5 h-5" />
-              </button>
+              <div className="flex items-center gap-2">
+                <button onClick={scrollToTop} className="text-blue-100 hover:text-white transition-colors" title="Scroll to top">
+                  <ArrowUp className="w-4 h-4" />
+                </button>
+                <button onClick={startNewChat} className="text-blue-100 hover:text-white transition-colors" title="New chat">
+                  <MessageSquarePlus className="w-4 h-4" />
+                </button>
+                <button onClick={() => setIsChatOpen(false)} className="text-blue-100 hover:text-white transition-colors ml-1" title="Close">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
             </div>
             
-            <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-zinc-50 dark:bg-zinc-950/50">
+            <div 
+              ref={chatContainerRef}
+              className="flex-1 overflow-y-auto p-4 space-y-4 bg-zinc-50 dark:bg-zinc-950/50"
+            >
               {chatMessages.filter(m => m.role !== 'system' && m.role !== 'tool' && m.content).map((msg, idx) => (
                 <div key={idx} className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
                   <div className={`max-w-[85%] rounded-2xl px-4 py-2 text-sm ${
@@ -1261,6 +1623,7 @@ export default function Dashboard() {
                   </div>
                 </div>
               )}
+              <div ref={messagesEndRef} />
             </div>
             
             <form onSubmit={handleAiCommand} className="p-3 bg-white dark:bg-zinc-900 border-t border-zinc-200 dark:border-zinc-800 flex gap-2">
