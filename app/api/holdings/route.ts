@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
-import yahooFinance from 'yahoo-finance2';
+import YahooFinance from 'yahoo-finance2';
 import { GoogleAuth } from 'google-auth-library';
 
-const yahoo = yahooFinance;
+const yahoo = new YahooFinance();
 
 const getAuthToken = async () => {
   if (!process.env.GOOGLE_CLIENT_EMAIL || !process.env.GOOGLE_PRIVATE_KEY || !process.env.GOOGLE_SHEET_ID) {
@@ -47,54 +47,7 @@ async function getYahooSymbolFromSheet(symbol: string) {
   }
 }
 
-// Tickertape Holdings
-async function getTickertapeHoldings(sid: string) {
-  try {
-    const url = `https://api.tickertape.in/mf/${sid}/portfolio`;
-    console.log(`Fetching Tickertape holdings: ${url}`);
-    const res = await fetch(url, {
-      headers: {
-        'Accept': 'application/json',
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Origin': 'https://www.tickertape.in',
-        'Referer': 'https://www.tickertape.in/'
-      }
-    });
-    if (!res.ok) {
-      // Quietly return null to allow fallback to continue
-      return null;
-    }
-    const data = await res.json();
-    console.log(`Tickertape holdings response for ${sid}:`, JSON.stringify(data).substring(0, 200));
-    const portfolio = data.data || {};
-    
-    if (!portfolio.holdings || portfolio.holdings.length === 0) {
-      return null;
-    }
-    
-    return {
-      holdings: (portfolio.holdings || []).map((h: any) => ({
-        symbol: h.ticker ? `${h.ticker}.NS` : h.sid, // Default to NSE for Indian stocks
-        holdingName: h.name,
-        holdingPercent: h.weight // Tickertape weights are usually 0-1
-      })),
-      sectorWeightings: (portfolio.sectorWeightings || []).map((s: any) => ({
-        sector: s.sector,
-        percentage: s.weight * 100
-      })),
-      assetAllocation: portfolio.assetAllocation ? {
-        equity: portfolio.assetAllocation.equity * 100,
-        debt: portfolio.assetAllocation.debt * 100,
-        cash: portfolio.assetAllocation.cash * 100
-      } : null,
-      categoryName: portfolio.category || null,
-      source: 'Tickertape'
-    };
-  } catch (e) {
-    console.error('Tickertape holdings error:', e);
-    return null;
-  }
-}
+// Tickertape holdings removed.
 
 export async function GET(request: Request) {
   let symbolForError = 'unknown';
@@ -109,88 +62,12 @@ export async function GET(request: Request) {
     }
 
     let targetSymbol = symbol;
-    let tickertapeData = null;
-
-    // Manual mapping for known problematic Yahoo symbols to Tickertape SIDs
-    const manualMappings: Record<string, string> = {
-      '0P0001S0S9.BO': '0P0001RQX5.BO', // Legacy Zerodha Nifty LargeMidcap 250
-      '0P0000XW0K.BO': '0P0000XV59.BO', // Legacy Edelweiss Liquid Fund
-      '0P0011MAX.BO': 'MF_120503',  // Axis Small Cap Fund
-      '120620': '0P0000XUY3.BO',    // ICICI Pru Nifty 50 Index Dir Gr
-      'MF_120620': '0P0000XUY3.BO', // ICICI Pru Nifty 50 Index Dir Gr
-      '101349': '0P00005UN0.BO',    // ICICI Pru Nifty 50 Index Reg Gr
-      'MF_101349': '0P00005UN0.BO', // ICICI Pru Nifty 50 Index Reg Gr
-      '135391': '0P00016NVL.BO',    // ICICI Pru Nifty 50 Index Dir IDCW-P
-      'MF_135391': '0P00016NVL.BO', // ICICI Pru Nifty 50 Index Dir IDCW-P
-      '135390': '0P00016QKW.BO',    // ICICI Pru Nifty 50 Index IDCW-P
-      'MF_135390': '0P00016QKW.BO', // ICICI Pru Nifty 50 Index IDCW-P
-      '152156': '0P0001RQX5.BO',    // Zerodha Nifty LargeMidcap 250 Index Fund
-      'MF_152156': '0P0001RQX5.BO', // Zerodha Nifty LargeMidcap 250 Index Fund
-      '152157': '0P0001RR1R.BO',    // Zerodha ELSS Tax Saver Nifty LargeMidcap 250 Index Fund
-      'MF_152157': '0P0001RR1R.BO', // Zerodha ELSS Tax Saver Nifty LargeMidcap 250 Index Fund
-      '140196': '0P0000XV59.BO',    // Edelweiss Liquid Fund - Direct Growth
-      'MF_140196': '0P0000XV59.BO', // Edelweiss Liquid Fund - Direct Growth
-      '140182': '0P0000AF06.BO',    // Edelweiss Liquid Fund - Regular Growth
-      'MF_140182': '0P0000AF06.BO', // Edelweiss Liquid Fund - Regular Growth
-      '149341': '0P0001NQZ6.BO',    // Edelweiss NIFTY Large Midcap 250 - Regular Growth
-      'MF_149341': '0P0001NQZ6.BO', // Edelweiss NIFTY Large Midcap 250 - Regular Growth
-      '149343': '0P0001NQZ6.BO',    // Edelweiss NIFTY Large Midcap 250 - Direct Growth
-      'MF_149343': '0P0001NQZ6.BO', // Edelweiss NIFTY Large Midcap 250 - Direct Growth
-    };
+    let tickertapeData: any = null; // Left for compatibility flow, but it won't be filled by TT.
 
     let isMapped = false;
     let lookupSymbol = symbol;
-    if (manualMappings[symbol]) {
-      lookupSymbol = manualMappings[symbol];
-      isMapped = true;
-      console.log(`Manual mapping applied for holdings: ${symbol} -> ${lookupSymbol}`);
-    }
 
-    // 1. Try Tickertape first
-    // If it looks like a SID (long string, no dots, not starting with 0P)
-    const isLikelyTickertapeSid = lookupSymbol.length >= 8 && !lookupSymbol.includes('.') && !lookupSymbol.startsWith('0P');
-    if (isLikelyTickertapeSid) {
-      tickertapeData = await getTickertapeHoldings(lookupSymbol);
-    }
-    
-    // If SID failed but we have a name, try searching by name
-    // Skip name search for symbols we explicitly mapped to Yahoo Finance to avoid looping back to broken Tickertape SIDs
-    const skipTickertapeNameSearch = ['0P0001BA2H.BO', '0P0000XUY3.BO', '0P00005UN0.BO', '0P00016NVL.BO', '0P00016QKW.BO', '0P0001RQX5.BO', '0P0001RR1R.BO', '0P0000XV59.BO', '0P0000AF06.BO', '0P0001NQZ6.BO'].includes(lookupSymbol);
-    if (!skipTickertapeNameSearch && (!tickertapeData || tickertapeData.debug || tickertapeData.error) && name) {
-      try {
-        const ttSearchUrl = `https://api.tickertape.in/search/suggest?text=${encodeURIComponent(name)}&types=mf`;
-        const ttRes = await fetch(ttSearchUrl, {
-          headers: {
-            'Accept': 'application/json',
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Origin': 'https://www.tickertape.in',
-            'Referer': 'https://www.tickertape.in/'
-          }
-        });
-        
-        if (ttRes.ok) {
-          const ttData = await ttRes.json();
-          const firstResult = ttData.data?.mfs?.[0] || ttData.data?.mf?.[0] || ttData.data?.[0];
-          if (firstResult && firstResult.sid) {
-            console.log(`Found alternative Tickertape SID via name search for "${name}": ${firstResult.sid} (${firstResult.name})`);
-            if (firstResult.sid !== lookupSymbol) {
-              const altData = await getTickertapeHoldings(firstResult.sid);
-              if (altData && !altData.debug) {
-                tickertapeData = altData;
-              }
-            }
-          }
-        }
-      } catch (e) {
-        // Quietly catch
-      }
-    }
-    
-    // If numeric (AMFI code), try Tickertape with MF_ prefix
-    if (!tickertapeData && /^\d+$/.test(lookupSymbol)) {
-      console.log(`Trying Tickertape with MF_ prefix for AMFI code: ${lookupSymbol}`);
-      tickertapeData = await getTickertapeHoldings(`MF_${lookupSymbol}`);
-    }
+    // 1. Tickertape logic removed
 
     if (!tickertapeData && !isMapped) {
       // If numeric, try to find mapping in sheet
@@ -208,30 +85,11 @@ export async function GET(request: Request) {
               const data = await res.json();
               const schemeName = data.meta.scheme_name;
               
-              // Try Tickertape search by name first
-              console.log(`Searching Tickertape for: ${schemeName}`);
-              const ttSearchUrl = `https://api.tickertape.in/search/suggest?text=${encodeURIComponent(schemeName)}&types=mf`;
-              const ttRes = await fetch(ttSearchUrl, {
-                headers: {
-                  'Accept': 'application/json',
-                  'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                  'Origin': 'https://www.tickertape.in',
-                  'Referer': 'https://www.tickertape.in/'
-                }
-              });
+              // Removed Tickertape search by name
               
-              if (ttRes.ok) {
-                const ttData = await ttRes.json();
-                const firstResult = ttData.data?.mfs?.[0] || ttData.data?.mf?.[0] || ttData.data?.[0];
-                if (firstResult && firstResult.sid) {
-                  console.log(`Found Tickertape SID via search: ${firstResult.sid}`);
-                  tickertapeData = await getTickertapeHoldings(firstResult.sid);
-                }
-              }
-
               if (!tickertapeData) {
                 if (schemeName.toLowerCase().includes('zerodha nifty largemidcap 250')) {
-                  tickertapeData = await getTickertapeHoldings('MF_151125');
+                  // Removed
                 } else {
                   const cleanName = schemeName.replace(/Direct Plan|Regular Plan|Direct|Regular|Growth|IDCW|Dividend|Option|Plan|Scheme|Index Fund|Fund|Index/gi, '').replace(/-/g, ' ').replace(/\s+/g, ' ').trim();
                   const ySearch = await yahoo.search(cleanName, { quotesCount: 5 }) as any;

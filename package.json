@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@google/genai": "^1.48.0",
+    "ccxt": "^4.5.50",
     "clsx": "^2.1.1",
     "firebase": "^12.11.0",
     "google-auth-library": "^10.6.2",

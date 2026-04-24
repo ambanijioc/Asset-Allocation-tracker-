@@ -1,11 +1,28 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
-import { getAuth, GoogleAuthProvider, signInWithPopup, signOut } from 'firebase/auth';
-import { getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot } from 'firebase/firestore';
+import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, createUserWithEmailAndPassword, signInWithEmailAndPassword } from 'firebase/auth';
+import { getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot, getDocFromServer, setLogLevel } from 'firebase/firestore';
 import firebaseConfig from '../firebase-applet-config.json';
+
+// Silence benign Firestore stream warnings
+setLogLevel('error');
 
 const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
 export const auth = getAuth(app);
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+
+// Test Firestore connection on boot
+(async () => {
+  try {
+    // Only test if we have a config and are in a browser-like environment (if needed, but Next.js handle this)
+    await getDocFromServer(doc(db, 'test', 'connection')).catch(e => {
+        if (e.message.includes('the client is offline') || e.message.includes('Could not reach Cloud Firestore')) {
+            console.warn("Firestore: Initial connection attempt timed out or offline. This is common during environment startup.");
+        }
+    });
+  } catch (error) {
+    console.warn("Firestore initial connection test warning (can be ignored if app functionality works):", error);
+  }
+})();
 
 export const googleProvider = new GoogleAuthProvider();
 
@@ -15,6 +32,35 @@ export const signInWithGoogle = async () => {
     return result.user;
   } catch (error) {
     console.error("Error signing in with Google", error);
+    throw error;
+  }
+};
+
+export const signUpWithEmail = async (email: string, password: string) => {
+  try {
+    const result = await createUserWithEmailAndPassword(auth, email, password);
+    return result.user;
+  } catch (error) {
+    console.error("Error signing up with Email", error);
+    throw error;
+  }
+};
+
+export const signInWithEmail = async (email: string, password: string) => {
+  try {
+    const result = await signInWithEmailAndPassword(auth, email, password);
+    return result.user;
+  } catch (error) {
+    console.error("Error signing in with Email", error);
+    throw error;
+  }
+};
+
+export const resetPassword = async (email: string) => {
+  try {
+    await sendPasswordResetEmail(auth, email);
+  } catch (error) {
+    console.error("Error sending password reset email", error);
     throw error;
   }
 };

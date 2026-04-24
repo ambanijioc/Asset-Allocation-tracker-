@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
-import yahooFinance from 'yahoo-finance2/dist/cjs/src/index.js';
+import YahooFinance from 'yahoo-finance2';
 
-const yahoo = yahooFinance;
+const yahoo = new YahooFinance();
 
 // Configuration for API endpoints
 const STOCK_APIS = (process.env.INDIAN_API_ENDPOINTS || 'https://stock.indianapi.in/search').split(',').map(s => {
@@ -92,60 +92,7 @@ async function fetchWithFailover(endpoints: string[], query: string, transformFn
   return [];
 }
 
-// Tickertape Search
-async function searchTickertape(query: string) {
-  try {
-    const url = `https://api.tickertape.in/search/suggest?text=${encodeURIComponent(query)}&types=stock,mf`;
-    console.log(`Fetching Tickertape search: ${url}`);
-    const res = await fetch(url, {
-      headers: {
-        'Accept': 'application/json',
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Origin': 'https://www.tickertape.in',
-        'Referer': 'https://www.tickertape.in/'
-      }
-    });
-    if (!res.ok) {
-      console.error(`Tickertape search failed with status: ${res.status}`);
-      return [];
-    }
-    const data = await res.json();
-    console.log(`Tickertape raw response for "${query}":`, JSON.stringify(data).substring(0, 500));
-    
-    // Handle new Tickertape response format
-    let results: any[] = [];
-    if (data.data) {
-      if (Array.isArray(data.data)) {
-        results = data.data;
-      } else {
-        if (data.data.stocks && Array.isArray(data.data.stocks)) {
-          results = results.concat(data.data.stocks);
-        }
-        if (data.data.mfs && Array.isArray(data.data.mfs)) {
-          results = results.concat(data.data.mfs);
-        }
-        if (data.data.mf && Array.isArray(data.data.mf)) {
-          results = results.concat(data.data.mf);
-        }
-      }
-    }
-    
-    console.log(`Tickertape search results for "${query}":`, results.length);
-    return results.map((r: any) => ({
-      symbol: r.ticker || r.sid,
-      sid: r.sid,
-      shortname: r.name,
-      longname: r.name,
-      quoteType: r.type === 'stock' ? 'EQUITY' : (r.type === 'mf' ? 'MUTUALFUND' : 'UNKNOWN'),
-      exchDisp: r.type === 'stock' ? 'NSE/BSE' : 'Mutual Fund',
-      typeDisp: r.type === 'stock' ? 'Equity' : 'Mutual Fund',
-      source: 'Tickertape'
-    }));
-  } catch (e) {
-    console.error('Tickertape search error:', e);
-    return [];
-  }
-}
+// Tickertape API removed.
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -157,6 +104,9 @@ export async function GET(request: Request) {
   }
 
   try {
+    console.log(`Search request: q=${q}, source=${source}`);
+    // Default source if tickertape or unknown is provided
+    const effectiveSource = (!source || source === 'tickertape') ? 'default' : source;
     // 1. Check if query is an ISIN (12 characters, starts with IN)
     const isIsin = /^IN[A-Z0-9]{10}$/i.test(q);
     let isinQuotes: any[] = [];
@@ -204,7 +154,7 @@ export async function GET(request: Request) {
 
     // 1. Search Mutual Funds (mfapi.in as primary for MFs)
     let mfQuotes: any[] = [];
-    if (source !== 'yahoo' && source !== 'indianapi' && source !== 'newapi') {
+    if (effectiveSource !== 'yahoo' && effectiveSource !== 'indianapi' && effectiveSource !== 'newapi') {
       // Smart MF Search Logic using cached full list
       const allMfs = await getFullMfList();
       
@@ -248,7 +198,7 @@ export async function GET(request: Request) {
           bestMatches = perfectMatches;
         }
 
-        mfQuotes = bestMatches.slice(0, 15).map((mf: any) => ({
+        mfQuotes = bestMatches.slice(0, 5).map((mf: any) => ({
           symbol: `MF_${mf.schemeCode}`,
           shortname: mf.schemeName,
           longname: mf.schemeName,
@@ -270,16 +220,13 @@ export async function GET(request: Request) {
       }
     }
 
-    // 2. Search Tickertape (Primary for Indian Stocks, secondary for MFs)
+    // 2. Tickertape Search (Removed)
     let tickertapeQuotes: any[] = [];
-    if (source === 'tickertape' || !source) {
-      tickertapeQuotes = await searchTickertape(q);
-    }
 
     // 3. Search Stocks (IndianAPI as backup)
     let stockQuotes: any[] = [];
     
-    if (source === 'indianapi') {
+    if (effectiveSource === 'indianapi') {
       stockQuotes = await fetchWithFailover(STOCK_APIS, q, (data) => {
         console.log('IndianAPI response:', data);
         const results = Array.isArray(data) ? data : (data.results || data.data || []);
@@ -293,7 +240,7 @@ export async function GET(request: Request) {
         }
         return [];
       }, STOCK_KEYS, 'query');
-    } else if (source === 'newapi') {
+    } else if (effectiveSource === 'newapi') {
       stockQuotes = await fetchWithFailover(NEW_STOCK_APIS, q, (data) => {
         console.log('NewAPI response:', data);
         const results = Array.isArray(data) ? data : (data.results || data.data || []);
@@ -308,30 +255,27 @@ export async function GET(request: Request) {
         }
         return [];
       }, STOCK_KEYS, 'query');
-    } else if (source === 'yahoo') {
+    } else if (effectiveSource === 'yahoo') {
       // Handled in step 4
-    } else if (!source) {
-      // Fallback for generic search if tickertape returned nothing for stocks
-      if (tickertapeQuotes.filter(q => q.quoteType === 'EQUITY').length === 0) {
-        // Try IndianAPI as fallback for generic search
-        stockQuotes = await fetchWithFailover(STOCK_APIS, q, (data) => {
-          const results = Array.isArray(data) ? data : (data.results || data.data || []);
-          if (Array.isArray(results)) {
-            return results.map(s => ({
-              symbol: s.symbol || s.ticker,
-              shortname: s.shortname || s.name,
-              longname: s.longname || s.name,
-              quoteType: 'EQUITY',
-              source: 'IndianAPI'
-            }));
-          }
-          return [];
-        }, STOCK_KEYS, 'query');
-      }
+    } else if (effectiveSource === 'default') {
+      // Fallback for generic search
+      stockQuotes = await fetchWithFailover(STOCK_APIS, q, (data) => {
+        const results = Array.isArray(data) ? data : (data.results || data.data || []);
+        if (Array.isArray(results)) {
+          return results.map(s => ({
+            symbol: s.symbol || s.ticker,
+            shortname: s.shortname || s.name,
+            longname: s.longname || s.name,
+            quoteType: 'EQUITY',
+            source: 'IndianAPI'
+          }));
+        }
+        return [];
+      }, STOCK_KEYS, 'query');
     }
 
     // 4. Search Yahoo Finance as a final fallback
-    if ((tickertapeQuotes.length === 0 && stockQuotes.length === 0) || source === 'yahoo') {
+    if (stockQuotes.length === 0 || effectiveSource === 'yahoo' || effectiveSource === 'default') {
       try {
         // If the query doesn't explicitly mention NSE, BSE, .NS, or .BO, bias towards NSE
         const isIndian = q.toLowerCase().includes('nse') || 
@@ -346,7 +290,7 @@ export async function GET(request: Request) {
         
         console.log('Searching Yahoo Finance for:', searchQ);
         const yahooResult = await yahoo.search(searchQ, { quotesCount: 6, newsCount: 0 });
-        console.log('Yahoo Finance response:', yahooResult);
+        console.log('Yahoo Finance response received.');
         stockQuotes = (yahooResult.quotes || []).map(q => ({
           symbol: q.symbol,
           shortname: q.shortname,
@@ -354,14 +298,23 @@ export async function GET(request: Request) {
           quoteType: q.quoteType,
           source: 'Yahoo Finance'
         }));
-      } catch (e) {
-        console.error('Yahoo Finance search error:', e);
+      } catch (e: any) {
+        console.error('Yahoo Finance search error:', e.message || e);
       }
     }
 
-    // 5. Combine and return
-    // Prioritize MFAPI results for mutual funds
-    let combined = [...mfQuotes, ...tickertapeQuotes, ...isinQuotes, ...stockQuotes];
+    // Interleave stockQuotes and mfQuotes for a better mixed result.
+    let combined: any[] = [];
+    const maxStocks = stockQuotes.length > 0 ? 5 : 0;
+    const maxMfs = mfQuotes.length > 0 ? 5 : 0;
+    
+    combined = [
+      ...stockQuotes.slice(0, 3), 
+      ...mfQuotes.slice(0, 2), 
+      ...stockQuotes.slice(3), 
+      ...mfQuotes.slice(2), 
+      ...isinQuotes
+    ];
     
     // Deduplicate by symbol
     const seenSymbols = new Set();

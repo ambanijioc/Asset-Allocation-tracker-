@@ -1,11 +1,11 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef, Fragment } from 'react';
+import { useState, useEffect, useCallback, useRef, Fragment, useMemo } from 'react';
 import { Plus, Search, Trash2, RefreshCw, TrendingUp, TrendingDown, DollarSign, PieChart as PieChartIcon, BarChart3, List, MessageCircle, Settings, Target, X, Send, Bot, ArrowUp, ArrowDown, ArrowUpDown, MessageSquarePlus, ChevronUp, ChevronDown, ChevronRight, Pencil, Info, LogOut, Filter } from 'lucide-react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RechartsTooltip, Legend, Treemap, BarChart, Bar, XAxis, YAxis, CartesianGrid } from 'recharts';
 import { v4 as uuidv4 } from 'uuid';
 import { GoogleGenAI, Type, ThinkingLevel } from '@google/genai';
-import { auth, db, signInWithGoogle, logOut, handleFirestoreError, OperationType } from '@/lib/firebase';
+import { auth, db, signInWithGoogle, signInWithEmail, signUpWithEmail, sendPasswordResetEmail, logOut, handleFirestoreError, OperationType } from '@/lib/firebase';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { doc, setDoc, updateDoc, onSnapshot, getDoc } from 'firebase/firestore';
 import Screener from '@/components/Screener';
@@ -21,6 +21,7 @@ type Asset = {
   currency: string;
   type: string;
   categoryPath?: string[];
+  exchange?: string;
 };
 
 type PriceData = {
@@ -32,6 +33,7 @@ type PriceData = {
   quoteType?: string;
   sector?: string;
   source?: string;
+  lastUpdated: number;
 };
 
 type ChatMessage = {
@@ -132,8 +134,34 @@ const CustomTreemapContent = (props: any) => {
   );
 };
 
+const PriceStatusIndicator = ({ lastUpdated, isFetching, symbol }: { lastUpdated?: number, isFetching: boolean, symbol: string }) => {
+  if (isFetching) return (
+    <div className="flex items-center gap-1 text-[10px] text-blue-500 font-medium">
+      <div className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />
+      <span>Updating...</span>
+    </div>
+  );
+  if (!lastUpdated) return (
+    <div className="flex items-center gap-1 text-[10px] text-zinc-400 font-medium">
+      <div className="w-1.5 h-1.5 rounded-full bg-zinc-300" />
+      <span>New</span>
+    </div>
+  );
+  
+  const isFresh = Date.now() - lastUpdated < 5 * 60 * 1000;
+  return (
+    <div className={`flex items-center gap-1 text-[10px] font-medium ${isFresh ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}`}>
+      <div className={`w-1.5 h-1.5 rounded-full ${isFresh ? 'bg-emerald-500' : 'bg-amber-500'}`} />
+      <span>{isFresh ? 'Live' : 'Old'}</span>
+    </div>
+  );
+};
+
 export default function Dashboard() {
   const [assets, setAssets] = useState<Asset[]>([]);
+  const [isFirestoreOffline, setIsFirestoreOffline] = useState(false);
+  const [binanceAssets, setBinanceAssets] = useState<Asset[]>([]);
+  const [coindcxAssets, setCoindcxAssets] = useState<Asset[]>([]);
   const [prices, setPrices] = useState<Record<string, PriceData>>({});
   const pricesRef = useRef(prices);
   
@@ -168,9 +196,12 @@ export default function Dashboard() {
 
   // AI State
   const [openRouterKey, setOpenRouterKey] = useState('');
+  const [huggingFaceKey, setHuggingFaceKey] = useState('');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [restoreStatus, setRestoreStatus] = useState<{message: string, isError: boolean} | null>(null);
   const [isAllocationSettingsOpen, setIsAllocationSettingsOpen] = useState(false);
-  const [expandedCategories, setExpandedCategories] = useState<Record<string, boolean>>({});
+  const [expandedCategories, setExpandedCategories] = useState<Record<string, boolean>>({ 'Total Portfolio': true });
+  const [expandedSymbols, setExpandedSymbols] = useState<Record<string, boolean>>({});
   const [expandedSectors, setExpandedSectors] = useState<Record<string, boolean>>({});
   const [expandedMarketCaps, setExpandedMarketCaps] = useState<Record<string, boolean>>({});
   const [expandedFunds, setExpandedFunds] = useState<Record<string, boolean>>({});
@@ -180,17 +211,23 @@ export default function Dashboard() {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([{ role: 'assistant', content: 'Hi! I can help you manage your portfolio. Try saying "Add 10 shares of Apple at $150" or "Remove Reliance".' }]);
   const [aiInput, setAiInput] = useState('');
   const [isAiTyping, setIsAiTyping] = useState(false);
-  const [aiProvider, setAiProvider] = useState<'openrouter' | 'google'>('google');
+  const [aiProvider, setAiProvider] = useState<'openrouter' | 'google' | 'huggingface'>('google');
   const [searchSource, setSearchSource] = useState<'indianapi' | 'yahoo' | 'newapi' | 'tickertape'>('tickertape');
   const [availableModels, setAvailableModels] = useState<any[]>([]);
   const [selectedModel, setSelectedModel] = useState('meta-llama/llama-3.3-70b-instruct:free');
   const [googleModel, setGoogleModel] = useState('gemini-3.1-flash-lite-preview');
+  const [huggingFaceModel, setHuggingFaceModel] = useState('google/gemma-2-27b-it');
   const [activeTab, setActiveTab] = useState<'portfolio' | 'screener'>('portfolio');
 
   // Auth State
   const [user, setUser] = useState<User | null>(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [isSigningIn, setIsSigningIn] = useState(false);
+  const [isEmailLoginMode, setIsEmailLoginMode] = useState(true);
+  const [isResetMode, setIsResetMode] = useState(false);
+  const [emailAuthInput, setEmailAuthInput] = useState('');
+  const [passwordAuthInput, setPasswordAuthInput] = useState('');
+  const [authError, setAuthError] = useState('');
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
@@ -203,10 +240,65 @@ export default function Dashboard() {
   const handleSignIn = async () => {
     if (isSigningIn) return;
     setIsSigningIn(true);
+    setAuthError('');
     try {
       await signInWithGoogle();
     } catch (error) {
       console.error("Sign in failed:", error);
+      setAuthError('Sign in with Google failed.');
+    } finally {
+      setIsSigningIn(false);
+    }
+  };
+
+  const handleEmailAuth = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (isSigningIn) return;
+    if (!emailAuthInput || !passwordAuthInput) {
+      setAuthError('Please enter both email and password.');
+      return;
+    }
+    setIsSigningIn(true);
+    setAuthError('');
+    try {
+      if (isEmailLoginMode) {
+        await signInWithEmail(emailAuthInput, passwordAuthInput);
+      } else {
+        await signUpWithEmail(emailAuthInput, passwordAuthInput);
+      }
+    } catch (err: any) {
+      console.error("Email auth error:", err);
+      if (err.code === 'auth/operation-not-allowed') {
+        setAuthError('Email/Password sign in is disabled. Enable it in Firebase Console.');
+      } else if (err.code === 'auth/invalid-credential') {
+        setAuthError('Incorrect email or password.');
+      } else if (err.code === 'auth/email-already-in-use') {
+        setAuthError('Account already exists. Try logging in.');
+      } else if (err.code === 'auth/weak-password') {
+        setAuthError('Password is too weak. Please use at least 6 characters.');
+      } else {
+        setAuthError(err.message || 'Authentication failed. Please try again.');
+      }
+    } finally {
+      setIsSigningIn(false);
+    }
+  };
+
+  const handleResetPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (isSigningIn) return;
+    if (!emailAuthInput) {
+      setAuthError('Please enter your email address.');
+      return;
+    }
+    setIsSigningIn(true);
+    setAuthError('');
+    try {
+      await resetPassword(emailAuthInput);
+      setAuthError('Password reset email sent. Please check your inbox.');
+      setIsResetMode(false);
+    } catch (err: any) {
+      setAuthError('Failed to send reset email: ' + err.message);
     } finally {
       setIsSigningIn(false);
     }
@@ -229,6 +321,41 @@ export default function Dashboard() {
     if (currency === 'USD') return price * usdToInr;
     if (currency === 'GBp') return (price / 100) * 105; // Approx GBP to INR
     return price;
+  };
+
+  const normalizeCategory = (category?: string) => {
+    if (!category) return 'Unknown';
+    const upper = category.toUpperCase();
+    if (upper === 'EQUITY' || upper === 'STOCK') return 'Equities';
+    if (upper === 'MUTUALFUND' || upper === 'ETF') return 'Mutual Funds';
+    if (upper === 'CRYPTOCURRENCY' || upper === 'CRYPTO') return 'Crypto';
+    if (upper === 'DEBT' || upper === 'FIXED INCOME') return 'Fixed Income';
+    if (upper === 'CASH') return 'Cash';
+    return category;
+  };
+
+  const isSmallCrypto = (asset: Asset) => {
+    const baseCat = normalizeCategory(asset.type);
+    if (baseCat === 'Crypto') {
+      const priceData = prices[asset.symbol];
+      const hasPrice = priceData?.regularMarketPrice != null;
+      const currentPriceRaw = asset.manualPrice !== undefined ? asset.manualPrice : (hasPrice ? priceData.regularMarketPrice : asset.entryPrice);
+      
+      let currentCurrency;
+      if (asset.manualPrice !== undefined) {
+        currentCurrency = asset.currency || guessCurrency(asset.symbol);
+      } else if (hasPrice) {
+        currentCurrency = priceData.currency || guessCurrency(asset.symbol);
+        if (typeof asset.symbol === 'string' && asset.symbol.includes('-USD') && currentCurrency === 'INR') currentCurrency = 'USD';
+      } else {
+        currentCurrency = asset.currency || guessCurrency(asset.symbol);
+      }
+      
+      const currentPrice = getConvertedPrice(currentPriceRaw, currentCurrency);
+      const value = currentPrice * asset.quantity;
+      if (value < 10) return true;
+    }
+    return false;
   };
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -294,6 +421,8 @@ export default function Dashboard() {
               idealAllocation,
               searchSource,
               openRouterKey,
+              huggingFaceKey,
+              huggingFaceModel,
               aiProvider,
               googleModel,
               openrouterModel: selectedModel,
@@ -306,7 +435,10 @@ export default function Dashboard() {
 
       // Sync to MongoDB backup
       try {
-        await fetch('/api/sync', {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 8000); // 8s timeout for backup sync
+
+        fetch('/api/sync', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -314,10 +446,22 @@ export default function Dashboard() {
             email: user.email,
             displayName: user.displayName,
             data: updates
-          })
+          }),
+          signal: controller.signal
+        }).then(res => {
+          clearTimeout(timeoutId);
+          if (!res.ok && res.status !== 503) { // 503 means purposefully disabled
+            console.warn('MongoDB backup sync returned status:', res.status);
+          }
+        }).catch(err => {
+          clearTimeout(timeoutId);
+          // Only log the error if it's not a deliberate abort or common network issue when starting up
+          if (err.name !== 'AbortError') {
+            console.debug('Optional MongoDB backup sync skipped:', err.message);
+          }
         });
       } catch (e) {
-        console.error('Failed to sync to MongoDB backup', e);
+        // Ignore errors in the synchronous part of the backup sync setup
       }
     } catch (e) {
       handleFirestoreError(e, OperationType.WRITE, `users/${user?.uid}`);
@@ -326,9 +470,98 @@ export default function Dashboard() {
 
   useEffect(() => {
     if (!isAuthReady || !user) return;
+    
+    // Helper to generic exchange fetch
+    const fetchExchange = async (url: string, setter: (assets: Asset[]) => void, exchangeName: string) => {
+      let retries = 6;
+      let success = false;
+      
+      while (retries > 0 && !success) {
+        try {
+          const res = await fetch(url).catch(e => {
+            if (e.message.includes('fetch') || e.name === 'TypeError') {
+               return { ok: false, status: 0, text: () => Promise.resolve('Failed to fetch') } as any;
+            }
+            throw e;
+          });
+          
+          if (!res.ok) {
+            const text = await res.text().catch(() => 'No body');
+            
+            // Special handling for temporary service unavailability
+            if (res.status === 503 || res.status === 429 || text.includes('Starting Server') || text.includes('Failed to fetch') || res.status === 0) {
+              const backoff = (7 - retries) * 4000; // Exponential-ish backoff
+              console.log(`${exchangeName}: Status ${res.status} (Temporary), waiting ${backoff/1000}s... (${retries} left)`);
+              await new Promise(r => setTimeout(r, backoff));
+              retries--;
+              continue;
+            }
+            
+            console.warn(`${exchangeName} API status ${res.status}: ${text.substring(0, 100)}`);
+            throw new Error(`Status ${res.status}`);
+          }
+
+          const contentType = res.headers.get('content-type');
+          if (!contentType || !contentType.includes('application/json')) {
+            const text = await res.text().catch(() => 'No body');
+            if (text.includes('Starting Server')) {
+              console.log(`${exchangeName}: Server starting, waiting...`);
+              await new Promise(r => setTimeout(r, 8000));
+              retries--;
+              continue;
+            }
+            throw new Error(`Non-JSON content: ${contentType}`);
+          }
+
+          const data = await res.json();
+          if (Array.isArray(data)) {
+            setter(data.map((a: any) => ({
+              ...a,
+              id: `${exchangeName.toLowerCase()}-${a.name}`,
+              entryPrice: 0,
+              currency: 'USD'
+            })));
+
+            setPrices(prev => {
+              const newPrices = { ...prev };
+              data.forEach((crypto: any) => {
+                if (crypto.currentPrice) {
+                  newPrices[crypto.symbol] = {
+                    symbol: crypto.symbol,
+                    regularMarketPrice: crypto.currentPrice,
+                    currency: 'USD',
+                    shortName: crypto.name,
+                    quoteType: 'CRYPTO',
+                    source: `${exchangeName} API`,
+                    lastUpdated: Date.now()
+                  };
+                }
+              });
+              return newPrices;
+            });
+            success = true;
+          } else {
+            console.error(`Failed to fetch ${exchangeName} assets:`, data.error);
+            success = true; // Don't retry on logical errors
+          }
+        } catch (err: any) {
+          console.error(`Fetch ${exchangeName} error (Attempt ${6 - retries}):`, err.message || err);
+          retries--;
+          if (retries > 0) await new Promise(r => setTimeout(r, 4000));
+        }
+      }
+    };
+
+    fetchExchange('/api/crypto/binance', setBinanceAssets, 'Binance');
+    fetchExchange('/api/crypto/coindcx', setCoindcxAssets, 'CoinDCX');
+  }, [user, isAuthReady]);
+
+  useEffect(() => {
+    if (!isAuthReady || !user) return;
 
     const userRef = doc(db, 'users', user.uid);
     const unsubscribe = onSnapshot(userRef, async (docSnap) => {
+      setIsFirestoreOffline(false);
       if (docSnap.exists()) {
         const data = docSnap.data();
         if (data.assets) setAssets(data.assets);
@@ -368,6 +601,8 @@ export default function Dashboard() {
           }
           if (data.settings.searchSource) setSearchSource(data.settings.searchSource);
           if (data.settings.openRouterKey) setOpenRouterKey(data.settings.openRouterKey);
+          if (data.settings.huggingFaceKey) setHuggingFaceKey(data.settings.huggingFaceKey);
+          if (data.settings.huggingFaceModel) setHuggingFaceModel(data.settings.huggingFaceModel);
           if (data.settings.aiProvider) setAiProvider(data.settings.aiProvider);
           if (data.settings.googleModel) {
             const validModels = ['gemini-3.1-flash-lite-preview', 'gemini-3.1-pro-preview', 'gemini-flash-latest'];
@@ -415,7 +650,21 @@ export default function Dashboard() {
         }
       }
     }, (error) => {
-      handleFirestoreError(error, OperationType.GET, `users/${user.uid}`);
+      // Suppress the benign "Disconnecting idle stream" warning which is common in idle serverless environments
+      if (error.message.includes('Disconnecting idle stream') || error.message.includes('Timed out waiting for new targets')) {
+        return;
+      }
+      
+      console.warn("Firestore snapshot error detected:", error.message);
+      if (error.message.includes('offline') || error.message.includes('backend') || error.message.includes('Internet connection')) {
+        setIsFirestoreOffline(true);
+      }
+      // handleFirestoreError throws, so keep it last or wrapped if we want more logic
+      try {
+        handleFirestoreError(error, OperationType.GET, `users/${user.uid}`);
+      } catch (e) {
+        // Logged by handleFirestoreError
+      }
     });
 
     return () => unsubscribe();
@@ -457,11 +706,21 @@ export default function Dashboard() {
         loadingHoldings.current[asset.symbol] = true;
         fetch(`/api/holdings?symbol=${encodeURIComponent(asset.symbol)}&name=${encodeURIComponent(asset.name || '')}`)
           .then(async res => {
+            const contentType = res.headers.get('content-type');
             const text = await res.text();
+            
+            if (!res.ok || (contentType && !contentType.includes('application/json'))) {
+               // Only log error if it doesn't look like the "Starting Server..." page
+               if (!text.includes('Starting Server')) {
+                   console.error('API Error fetching holdings for', asset.symbol, res.status, text.substring(0, 100));
+               }
+               return { holdings: [] };
+            }
+            
             try {
               return JSON.parse(text);
             } catch (e) {
-              console.error('Failed to parse holdings data:', text.substring(0, 100));
+              console.error('Failed to parse holdings data for', asset.symbol, ':', text.substring(0, 100));
               return { holdings: [] };
             }
           })
@@ -511,6 +770,7 @@ export default function Dashboard() {
     try {
       const symbolsSet = new Set<string>();
       assets.forEach(a => symbolsSet.add(a.symbol));
+      // Binance assets are priced immediately on fetch, no need for Yahoo
       symbolsSet.add('INR=X');
 
       Object.values(fundHoldings).forEach(fundData => {
@@ -533,25 +793,57 @@ export default function Dashboard() {
 
       const newPrices: Record<string, PriceData> = {};
       
-      const chunkSize = 10;
+      const chunkSize = 8;
       for (let i = 0; i < symbols.length; i += chunkSize) {
+        // Wait briefly between chunks
+        if (i > 0) await new Promise(r => setTimeout(r, 600));
+        
         const chunk = symbols.slice(i, i + chunkSize);
         
-        let retries = 2;
+        let retries = 6; 
         let success = false;
         
         while (retries >= 0 && !success) {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 45000); // 45s timeout per chunk
+          
           try {
-            const res = await fetch(`/api/price?symbols=${encodeURIComponent(chunk.join(','))}${forceRefresh ? '&refresh=true' : ''}`);
+            const res = await fetch(`/api/price?symbols=${encodeURIComponent(chunk.join(','))}${forceRefresh ? '&refresh=true' : ''}`, {
+              signal: controller.signal
+            }).catch(e => {
+              // Specifically handle "Failed to fetch" which is often a network/boot issue
+              if (e.message.includes('fetch') || e.name === 'TypeError') {
+                 return { ok: false, status: 0, text: () => Promise.resolve('Failed to fetch') } as any;
+              }
+              throw e;
+            });
+            clearTimeout(timeoutId);
             
             if (!res.ok) {
-              throw new Error(`Price API status ${res.status}`);
+              const errBody = await res.text().catch(() => 'No body');
+              if (errBody.includes('Failed to fetch') || errBody.includes('Starting Server') || res.status === 0) {
+                console.log('Network error or server booting, waiting...');
+                await new Promise(r => setTimeout(r, 9000));
+                retries--;
+                continue;
+              }
+              throw new Error(`Price API status ${res.status}: ${errBody.substring(0, 100)}`);
             }
 
             const contentType = res.headers.get('content-type');
             if (!contentType || !contentType.includes('application/json')) {
               const text = await res.text();
               console.error(`Non-JSON content-type: ${contentType}. Body: ${text.substring(0, 200)}`);
+              
+              // If we see "Starting Server", it means the dev environment is booting up.
+              // We should wait longer and retry.
+              if (text.includes('Starting Server')) {
+                console.log('Server is starting up, waiting before retry...');
+                await new Promise(r => setTimeout(r, 9000));
+                retries--;
+                continue;
+              }
+              
               throw new Error(`Non-JSON content-type: ${contentType}`);
             }
 
@@ -566,15 +858,19 @@ export default function Dashboard() {
                   marketCap: item.marketCap,
                   quoteType: item.quoteType,
                   sector: item.sector,
-                  source: item.source
+                  source: item.source,
+                  lastUpdated: Date.now()
                 };
               });
               success = true;
             }
-          } catch (err) {
-            console.error(`Attempt ${2 - retries + 1} failed for chunk ${i}:`, err);
+          } catch (err: any) {
+            clearTimeout(timeoutId);
+            const isTimeout = err.name === 'AbortError';
+            console.error(`Attempt ${4 - retries} failed for chunk ${i} (Symbols: ${chunk.join(', ')}) (${isTimeout ? 'Timeout' : 'Error'}):`, err.message || err);
+            
             retries--;
-            if (retries >= 0) await new Promise(r => setTimeout(r, 1000));
+            if (retries >= 0) await new Promise(r => setTimeout(r, 3000)); // Increased backoff
           }
         }
       }
@@ -590,6 +886,12 @@ export default function Dashboard() {
   useEffect(() => {
     if (assets.length > 0) {
       fetchPrices();
+      
+      const interval = setInterval(() => {
+        fetchPrices(true);
+      }, 60000); // Fetch every minute
+      
+      return () => clearInterval(interval);
     }
   }, [assets, fetchPrices]);
 
@@ -667,10 +969,40 @@ export default function Dashboard() {
     resetForm();
   };
 
+  const getBaseCryptoSymbol = (symbol: string) => {
+    if (typeof symbol === 'string' && symbol.includes('-')) {
+      const parts = symbol.split('-');
+      if (['USD', 'INR', 'EUR', 'GBP', 'CAD', 'AUD'].includes(parts[parts.length - 1])) {
+        return parts.slice(0, -1).join('-');
+      }
+    }
+    return symbol;
+  };
+
+  const isSameCrypto = (symbol1: string, symbol2: string, type1: string, type2?: string) => {
+    const isCrypto1 = type1 === 'CRYPTOCURRENCY' || type1 === 'CRYPTO';
+    const isCrypto2 = type2 === 'CRYPTOCURRENCY' || type2 === 'CRYPTO' || (!type2 && (symbol2.includes('-USD') || symbol2.includes('-INR')));
+    
+    if (!isCrypto1 && !isCrypto2) return false;
+    
+    const base1 = getBaseCryptoSymbol(symbol1);
+    const base2 = getBaseCryptoSymbol(symbol2);
+    
+    return base1 === base2 && base1 !== symbol1 && base2 !== symbol2;
+  };
+
+  const findExistingAssetToMerge = (selectedRes: any) => {
+    if (!selectedRes) return undefined;
+    return assets.find(a => 
+      a.symbol === selectedRes.symbol || 
+      isSameCrypto(a.symbol, selectedRes.symbol, a.type, selectedRes.quoteType || selectedRes.type)
+    );
+  };
+
   const handleMergeAsset = () => {
     if (!selectedResult || !quantity || !entryPrice) return;
     
-    const existing = assets.find(a => a.symbol === selectedResult.symbol);
+    const existing = findExistingAssetToMerge(selectedResult);
     if (!existing) return;
 
     const newQty = parseFloat(quantity);
@@ -715,76 +1047,122 @@ export default function Dashboard() {
     });
   };
 
-  const sortedAssets = [...assets].sort((a, b) => {
-    // 1. Sort by category priority first
-    const getCategoryPriority = (asset: Asset) => {
-      const type = (asset.type || '').toUpperCase();
-      if (type === 'EQUITY' || type === 'STOCK') return 1;
-      if (type === 'MUTUALFUND' || type === 'ETF') return 2;
-      if (type === 'DEBT' || type === 'FIXED INCOME') return 3;
-      if (type === 'CASH') return 4;
-      if (type === 'CRYPTOCURRENCY' || type === 'CRYPTO') return 5;
-      return 6; // Others
-    };
+  const mergedAssets = useMemo(() => [...assets, ...binanceAssets, ...coindcxAssets], [assets, binanceAssets, coindcxAssets]);
 
-    const priorityA = getCategoryPriority(a);
-    const priorityB = getCategoryPriority(b);
+  const renderAssets = useMemo(() => {
+    // 1. Group assets by Category and Ticker
+    const groups: Record<string, Asset[]> = {};
+    mergedAssets.forEach(asset => {
+      const cat = normalizeCategory(asset.type);
+      const groupKey = `${cat}-${asset.symbol}`;
+      if (!groups[groupKey]) groups[groupKey] = [];
+      groups[groupKey].push(asset);
+    });
 
-    if (priorityA !== priorityB) {
-      return priorityA - priorityB;
-    }
+    // 2. Create aggregated rows or individual assets
+    const aggregated: (Asset & { isGroup?: boolean; subItems?: Asset[] })[] = [];
+    Object.values(groups).forEach(items => {
+      if (items.length > 1) {
+        const first = items[0];
+        const totalQty = items.reduce((sum, i) => sum + i.quantity, 0);
+        
+        // Calculate weighted avg entry price
+        let totalInvested = 0;
+        items.forEach(item => {
+          const assetCurrency = item.currency || guessCurrency(item.symbol);
+          const entryPrice = getConvertedPrice(item.entryPrice, assetCurrency);
+          totalInvested += entryPrice * item.quantity;
+        });
+        const weightedEntryPrice = totalInvested / totalQty;
 
-    // 2. If same category, apply user sort
-    if (!sortConfig.key || !sortConfig.direction) return 0;
-
-    const getVal = (asset: Asset) => {
-      const priceData = prices[asset.symbol];
-      const hasPrice = priceData?.regularMarketPrice != null;
-      const currentPriceRaw = asset.manualPrice || (hasPrice ? priceData.regularMarketPrice : asset.entryPrice);
-      
-      let currentCurrency;
-      if (asset.manualPrice) {
-        currentCurrency = asset.currency || guessCurrency(asset.symbol);
-      } else if (hasPrice) {
-        currentCurrency = priceData.currency || guessCurrency(asset.symbol);
-        if (typeof asset.symbol === 'string' && asset.symbol.includes('-USD') && currentCurrency === 'INR') currentCurrency = 'USD';
+        aggregated.push({
+          ...first,
+          id: `group-${first.symbol}`,
+          quantity: totalQty,
+          entryPrice: weightedEntryPrice, // Weighted average in INR
+          currency: 'INR',
+          isGroup: true,
+          subItems: items.sort((a, b) => b.quantity - a.quantity)
+        });
       } else {
-        currentCurrency = asset.currency || guessCurrency(asset.symbol);
+        aggregated.push(items[0]);
       }
-      
-      const currentPrice = getConvertedPrice(currentPriceRaw, currentCurrency);
-      
-      let assetCurrency = asset.currency || guessCurrency(asset.symbol);
-      const entryPrice = getConvertedPrice(asset.entryPrice, assetCurrency);
+    });
 
-      switch (sortConfig.key) {
-        case 'name': return asset.name || '';
-        case 'symbol': return asset.symbol || '';
-        case 'quantity': return asset.quantity;
-        case 'entryPrice': return entryPrice;
-        case 'currentPrice': return currentPrice;
-        case 'currentValue': return currentPrice * asset.quantity;
-        case 'pnl': return (currentPrice * asset.quantity) - (entryPrice * asset.quantity);
-        case 'pnlPercent': 
-          const invested = entryPrice * asset.quantity;
-          return invested > 0 ? (((currentPrice * asset.quantity) - invested) / invested) * 100 : 0;
-        default: return 0;
+    // 3. Sort aggregated list using the same strategy as sortedAssets
+    return aggregated.sort((a, b) => {
+      const getCategoryPriority = (asset: Asset) => {
+        const cat = normalizeCategory(asset.type);
+        if (cat === 'Equities' || cat === 'EQUITY' || cat === 'STOCK') return 1;
+        if (cat === 'Mutual Funds' || cat === 'MUTUALFUND' || cat === 'ETF') return 2;
+        if (cat === 'Fixed Income' || cat === 'DEBT' || cat === 'FIXED INCOME') return 3;
+        if (cat === 'Cash' || cat === 'CASH') return 4;
+        if (cat === 'Crypto' || cat === 'CRYPTOCURRENCY') return 5;
+        return 6; 
+      };
+
+      const priorityA = getCategoryPriority(a);
+      const priorityB = getCategoryPriority(b);
+
+      if (priorityA !== priorityB) return priorityA - priorityB;
+
+      if (priorityA === 5) {
+        const aSmall = isSmallCrypto(a);
+        const bSmall = isSmallCrypto(b);
+        if (aSmall !== bSmall) return aSmall ? 1 : -1;
       }
-    };
 
-    const valA = getVal(a);
-    const valB = getVal(b);
+      if (!sortConfig.key || !sortConfig.direction) return 0;
 
-    if (typeof valA === 'string' && typeof valB === 'string') {
-      return sortConfig.direction === 'asc' 
-        ? valA.localeCompare(valB) 
-        : valB.localeCompare(valA);
-    }
+      const getVal = (asset: Asset) => {
+        const priceData = prices[asset.symbol];
+        const hasPrice = priceData?.regularMarketPrice != null;
+        const currentPriceRaw = asset.manualPrice || (hasPrice ? priceData.regularMarketPrice : asset.entryPrice);
+        
+        let currentCurrency;
+        if (asset.manualPrice) {
+          currentCurrency = asset.currency || guessCurrency(asset.symbol);
+        } else if (hasPrice) {
+          currentCurrency = priceData.currency || guessCurrency(asset.symbol);
+          if (typeof asset.symbol === 'string' && asset.symbol.includes('-USD') && currentCurrency === 'INR') currentCurrency = 'USD';
+        } else {
+          currentCurrency = asset.currency || guessCurrency(asset.symbol);
+        }
+        
+        const currentPrice = getConvertedPrice(currentPriceRaw, currentCurrency);
+        const assetCurrency = asset.currency || guessCurrency(asset.symbol);
+        const entryPrice = asset.isGroup ? asset.entryPrice : getConvertedPrice(asset.entryPrice, assetCurrency);
 
-    if (valA < valB) return sortConfig.direction === 'asc' ? -1 : 1;
-    if (valA > valB) return sortConfig.direction === 'asc' ? 1 : -1;
-    return 0;
-  });
+        switch (sortConfig.key) {
+          case 'name': return asset.name || '';
+          case 'symbol': return asset.symbol || '';
+          case 'quantity': return asset.quantity;
+          case 'entryPrice': return entryPrice;
+          case 'investedValue': return entryPrice * asset.quantity;
+          case 'currentPrice': return currentPrice;
+          case 'currentValue': return currentPrice * asset.quantity;
+          case 'pnl': return (currentPrice * asset.quantity) - (entryPrice * asset.quantity);
+          case 'pnlPercent': 
+            const invested = entryPrice * asset.quantity;
+            return invested > 0 ? (((currentPrice * asset.quantity) - invested) / invested) * 100 : 0;
+          default: return 0;
+        }
+      };
+
+      const valA = getVal(a);
+      const valB = getVal(b);
+
+      if (typeof valA === 'string' && typeof valB === 'string') {
+        return sortConfig.direction === 'asc' ? valA.localeCompare(valB) : valB.localeCompare(valA);
+      }
+
+      const numA = Number(valA);
+      const numB = Number(valB);
+      if (numA < numB) return sortConfig.direction === 'asc' ? -1 : 1;
+      if (numA > numB) return sortConfig.direction === 'asc' ? 1 : -1;
+      return 0;
+    });
+  }, [mergedAssets, sortConfig, prices, isSmallCrypto]);
 
   const SortIndicator = ({ column }: { column: string }) => {
     if (sortConfig.key !== column) return <ArrowUpDown className="w-3 h-3 ml-1 opacity-20" />;
@@ -841,6 +1219,12 @@ export default function Dashboard() {
     setIsSettingsOpen(false);
   };
 
+  const saveHuggingFaceKey = (key: string) => {
+    setHuggingFaceKey(key);
+    syncToDb({ settings: { huggingFaceKey: key } });
+    setIsSettingsOpen(false);
+  };
+
   const handleExportData = () => {
     const dataToExport = {
       assets,
@@ -862,6 +1246,40 @@ export default function Dashboard() {
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+  };
+
+  const handleRestoreFromMongo = async () => {
+    if (!user) return;
+    setRestoreStatus({ message: 'Restoring...', isError: false });
+    try {
+      const res = await fetch(`/api/sync?uid=${user.uid}`);
+      const data = await res.json();
+      if (data.success && data.data) {
+        const importedData = data.data;
+        if (importedData.assets) setAssets(importedData.assets);
+        if (importedData.fundHoldings) setFundHoldings(importedData.fundHoldings);
+        if (importedData.settings) {
+          if (importedData.settings.idealAllocation) setIdealAllocation(importedData.settings.idealAllocation);
+          if (importedData.settings.searchSource) setSearchSource(importedData.settings.searchSource);
+          if (importedData.settings.aiProvider) setAiProvider(importedData.settings.aiProvider);
+          if (importedData.settings.openrouterModel) setSelectedModel(importedData.settings.openrouterModel);
+          if (importedData.settings.googleModel) setGoogleModel(importedData.settings.googleModel);
+        }
+        await syncToDb({
+          assets: importedData.assets || assets,
+          fundHoldings: importedData.fundHoldings || fundHoldings,
+          settings: importedData.settings || {}
+        });
+        setRestoreStatus({ message: 'Successfully restored portfolio from MongoDB backup!', isError: false });
+        setTimeout(() => setRestoreStatus(null), 3000);
+      } else {
+        setRestoreStatus({ message: 'No backup found or failed to restore: ' + (data.error || 'Unknown error'), isError: true });
+        setTimeout(() => setRestoreStatus(null), 3000);
+      }
+    } catch (e) {
+      setRestoreStatus({ message: 'Error restoring from backup: ' + e, isError: true });
+      setTimeout(() => setRestoreStatus(null), 3000);
+    }
   };
 
   const handleImportData = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -909,6 +1327,33 @@ export default function Dashboard() {
     reader.readAsText(file);
     // Reset file input
     e.target.value = '';
+  };
+
+  const callHuggingFace = async (messages: any[], tools: any[]) => {
+    if (!huggingFaceKey) {
+      throw new Error('Hugging Face API key is required. Please set it in Settings.');
+    }
+
+    const res = await fetch(`https://api-inference.huggingface.co/v1/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${huggingFaceKey}`
+      },
+      body: JSON.stringify({
+        model: huggingFaceModel,
+        messages: messages,
+        tools: tools,
+        max_tokens: 1024
+      })
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`HF Error (${res.status}): ${text.substring(0, 200)}`);
+    }
+
+    return await res.json();
   };
 
   const callOpenRouter = async (messages: any[], tools: any[]) => {
@@ -1385,7 +1830,12 @@ export default function Dashboard() {
         Current portfolio symbols: ${assets.map(a => a.symbol).join(', ')}` 
       };
       
-      let response = await callOpenRouter([systemPrompt, ...currentMessages], tools);
+      let response;
+      if (aiProvider === 'google' || aiProvider === 'openrouter') {
+        response = await callOpenRouter([systemPrompt, ...currentMessages], tools);
+      } else {
+        response = await callHuggingFace([systemPrompt, ...currentMessages], tools);
+      }
       if (!response.choices || response.choices.length === 0) {
         throw new Error(response.error?.message || 'The AI model returned an empty response. It might be overloaded or unavailable.');
       }
@@ -1605,7 +2055,11 @@ export default function Dashboard() {
         currentMessages.push(...toolResponses);
         setChatMessages(prev => [...prev, toolCallMessage, ...toolResponses]);
         
-        response = await callOpenRouter([systemPrompt, ...currentMessages], tools);
+        if (aiProvider === 'google' || aiProvider === 'openrouter') {
+          response = await callOpenRouter([systemPrompt, ...currentMessages], tools);
+        } else {
+          response = await callHuggingFace([systemPrompt, ...currentMessages], tools);
+        }
         if (!response.choices || response.choices.length === 0) {
           throw new Error(response.error?.message || 'The AI model returned an empty response. It might be overloaded or unavailable.');
         }
@@ -1630,7 +2084,12 @@ export default function Dashboard() {
     }
   };
 
-  const portfolioStats = assets.reduce((acc, asset) => {
+  const portfolioStats = mergedAssets.reduce((acc, asset) => {
+    const category = normalizeCategory(asset.type);
+    if (!acc.byCategory[category]) {
+      acc.byCategory[category] = { quantity: 0, currentValue: 0, investedValue: 0 };
+    }
+
     const priceData = prices[asset.symbol];
     const hasPrice = priceData?.regularMarketPrice != null;
     const currentPriceRaw = asset.manualPrice !== undefined ? asset.manualPrice : (hasPrice ? priceData.regularMarketPrice : asset.entryPrice);
@@ -1656,24 +2115,23 @@ export default function Dashboard() {
     acc.currentValue += currentValue;
     acc.investedValue += investedValue;
     
+    acc.byCategory[category].quantity += asset.quantity;
+    acc.byCategory[category].currentValue += currentValue;
+    acc.byCategory[category].investedValue += investedValue;
+
+    if (isSmallCrypto(asset)) {
+      acc.smallCryptoStats.quantity += asset.quantity;
+      acc.smallCryptoStats.currentValue += currentValue;
+      acc.smallCryptoStats.investedValue += investedValue;
+    }
+    
     return acc;
-  }, { currentValue: 0, investedValue: 0 });
+  }, { currentValue: 0, investedValue: 0, byCategory: {} as Record<string, { quantity: number; currentValue: number; investedValue: number; }>, smallCryptoStats: { quantity: 0, currentValue: 0, investedValue: 0 } });
 
   const totalProfitLoss = portfolioStats.currentValue - portfolioStats.investedValue;
   const totalProfitLossPercent = portfolioStats.investedValue > 0 ? (totalProfitLoss / portfolioStats.investedValue) * 100 : 0;
 
-  const normalizeCategory = (category: string) => {
-    if (!category) return 'Unknown';
-    const upper = category.toUpperCase();
-    if (upper === 'EQUITY') return 'Equities';
-    if (upper === 'MUTUALFUND') return 'Mutual Funds';
-    if (upper === 'CRYPTOCURRENCY' || upper === 'CRYPTO') return 'Crypto';
-    if (upper === 'DEBT' || upper === 'FIXED INCOME') return 'Fixed Income';
-    if (upper === 'CASH') return 'Cash';
-    return category;
-  };
-
-  const allocationData = assets.reduce((acc: any[], asset) => {
+  const allocationData = mergedAssets.reduce((acc: any[], asset) => {
     const priceData = prices[asset.symbol];
     const hasPrice = priceData?.regularMarketPrice != null;
     const currentPriceRaw = asset.manualPrice !== undefined ? asset.manualPrice : (hasPrice ? priceData.regularMarketPrice : asset.entryPrice);
@@ -2341,11 +2799,85 @@ export default function Dashboard() {
             <PieChartIcon className="w-8 h-8" />
           </div>
           <h1 className="text-2xl font-bold text-zinc-900 dark:text-zinc-100 mb-2">Asset Allocation Tracker</h1>
-          <p className="text-zinc-500 dark:text-zinc-400 mb-8">Sign in to manage your assets, analyze your allocation, and get AI-powered insights.</p>
+          <p className="text-zinc-500 dark:text-zinc-400 mb-6">Sign in to manage your assets, analyze your allocation, and get AI-powered insights.</p>
+          
+          <form onSubmit={isResetMode ? handleResetPassword : handleEmailAuth} className="space-y-4 mb-6">
+            <div className="space-y-1 text-left">
+              <label className="text-sm font-medium text-zinc-700 dark:text-zinc-300 ml-1">Email</label>
+              <input 
+                type="email" 
+                value={emailAuthInput}
+                onChange={(e) => setEmailAuthInput(e.target.value)}
+                placeholder="you@example.com"
+                required
+                className="w-full bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-xl px-4 py-3 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 transition-all text-zinc-900 dark:text-zinc-100"
+              />
+            </div>
+            
+            {!isResetMode && (
+              <div className="space-y-1 text-left">
+                <label className="text-sm font-medium text-zinc-700 dark:text-zinc-300 ml-1">Password</label>
+                <input 
+                  type="password" 
+                  value={passwordAuthInput}
+                  onChange={(e) => setPasswordAuthInput(e.target.value)}
+                  placeholder="••••••••"
+                  required={!isResetMode}
+                  minLength={6}
+                  className="w-full bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-xl px-4 py-3 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 transition-all text-zinc-900 dark:text-zinc-100"
+                />
+              </div>
+            )}
+
+            {authError && (
+              <div className={`text-sm px-4 py-3 rounded-lg text-left ${authError.includes('sent') ? 'bg-emerald-50 text-emerald-600 dark:bg-emerald-900/30' : 'bg-red-50 text-red-600 dark:bg-red-900/30'}`}>
+                {authError}
+              </div>
+            )}
+
+            <button
+              type="submit"
+              disabled={isSigningIn}
+              className="w-full bg-blue-600 hover:bg-blue-700 text-white rounded-xl px-4 py-3 font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
+            >
+              {isSigningIn ? 'Processing...' : (isResetMode ? 'Send Reset Link' : (isEmailLoginMode ? 'Sign In with Email' : 'Create Account'))}
+            </button>
+          </form>
+
+          {isEmailLoginMode && !isResetMode && (
+            <div className="text-right mb-6 -mt-4">
+              <button 
+                type="button"
+                onClick={() => { setIsResetMode(true); setAuthError(''); }}
+                className="text-sm text-blue-600 dark:text-blue-400 hover:underline"
+              >
+                Forgot password?
+              </button>
+            </div>
+          )}
+          {isResetMode && (
+            <div className="text-center mb-6 -mt-4">
+              <button 
+                type="button"
+                onClick={() => { setIsResetMode(false); setAuthError(''); }}
+                className="text-sm text-zinc-500 hover:underline"
+              >
+                Back to login
+              </button>
+            </div>
+          )}
+
+          <div className="flex items-center gap-3 mb-6">
+            <div className="flex-1 h-px bg-zinc-200 dark:bg-zinc-800"></div>
+            <span className="text-zinc-400 text-sm font-medium">OR</span>
+            <div className="flex-1 h-px bg-zinc-200 dark:bg-zinc-800"></div>
+          </div>
+
           <button
             onClick={handleSignIn}
             disabled={isSigningIn}
-            className="w-full flex items-center justify-center gap-3 bg-white dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 text-zinc-700 dark:text-zinc-300 px-6 py-3 rounded-xl font-medium hover:bg-zinc-50 dark:hover:bg-zinc-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            type="button"
+            className="w-full flex items-center justify-center gap-3 bg-white dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 text-zinc-700 dark:text-zinc-300 px-6 py-3 rounded-xl font-medium hover:bg-zinc-50 dark:hover:bg-zinc-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed mb-4"
           >
             {isSigningIn ? (
               <div className="w-5 h-5 border-2 border-zinc-500 border-t-transparent rounded-full animate-spin" />
@@ -2357,8 +2889,22 @@ export default function Dashboard() {
                 <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
               </svg>
             )}
-            {isSigningIn ? 'Signing in...' : 'Continue with Google'}
+            Continue with Google
           </button>
+
+          <p className="text-zinc-500 dark:text-zinc-400 text-sm">
+            {isEmailLoginMode ? "Don't have an account? " : "Already have an account? "}
+            <button 
+              type="button"
+              className="text-blue-600 dark:text-blue-400 font-medium hover:underline focus:outline-none"
+              onClick={() => {
+                setIsEmailLoginMode(!isEmailLoginMode);
+                setAuthError('');
+              }}
+            >
+              {isEmailLoginMode ? "Sign up" : "Log in"}
+            </button>
+          </p>
         </div>
       </div>
     );
@@ -2377,7 +2923,15 @@ export default function Dashboard() {
         {/* Header */}
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
           <div>
-            <h1 className="text-3xl font-bold tracking-tight">Asset Allocation Tracker</h1>
+            <div className="flex items-center gap-3">
+              <h1 className="text-3xl font-bold tracking-tight">Asset Allocation Tracker</h1>
+              {isFirestoreOffline && (
+                <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400 text-xs font-medium border border-amber-200 dark:border-amber-800 animate-pulse">
+                  <div className="w-1.5 h-1.5 rounded-full bg-amber-500"></div>
+                  Firestore Offline
+                </div>
+              )}
+            </div>
             <p className="text-zinc-500 dark:text-zinc-400 mt-1">Track your investments in real-time</p>
           </div>
           <div className="flex gap-3">
@@ -3292,6 +3846,12 @@ export default function Dashboard() {
           <div className="lg:col-span-2 bg-white dark:bg-zinc-900 rounded-2xl border border-zinc-200 dark:border-zinc-800 shadow-sm overflow-hidden">
             <div className="p-6 border-b border-zinc-200 dark:border-zinc-800">
               <h2 className="text-lg font-semibold">Your Assets</h2>
+              <div className="flex items-center gap-3 text-[10px] text-zinc-500 mt-2">
+                <div className="flex items-center gap-1"><div className="w-2 h-2 rounded-full bg-blue-500"></div> Fetching</div>
+                <div className="flex items-center gap-1"><div className="w-2 h-2 rounded-full bg-emerald-500"></div> Fresh</div>
+                <div className="flex items-center gap-1"><div className="w-2 h-2 rounded-full bg-yellow-500"></div> Old</div>
+                <div className="flex items-center gap-1"><div className="w-2 h-2 rounded-full bg-zinc-300"></div> Unknown</div>
+              </div>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-left text-sm">
@@ -3309,6 +3869,9 @@ export default function Dashboard() {
                     <th className="px-6 py-4 font-medium text-right cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors" onClick={() => handleSort('currentPrice')}>
                       <div className="flex items-center justify-end">LTP <SortIndicator column="currentPrice" /></div>
                     </th>
+                    <th className="px-6 py-4 font-medium text-right cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors" onClick={() => handleSort('investedValue')}>
+                      <div className="flex items-center justify-end">Invested Value <SortIndicator column="investedValue" /></div>
+                    </th>
                     <th className="px-6 py-4 font-medium text-right cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors" onClick={() => handleSort('currentValue')}>
                       <div className="flex items-center justify-end">Current Value <SortIndicator column="currentValue" /></div>
                     </th>
@@ -3319,180 +3882,262 @@ export default function Dashboard() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
-                  {assets.length === 0 ? (
+                  {mergedAssets.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="px-6 py-12 text-center text-zinc-500">
+                      <td colSpan={8} className="px-6 py-12 text-center text-zinc-500">
                         No assets added yet. Click &quot;Add Asset&quot; to get started.
                       </td>
                     </tr>
                   ) : (
-                    sortedAssets.map((asset, index) => {
+                    renderAssets.map((asset, index) => {
                       const currentCategory = normalizeCategory(asset.type);
-                      const prevCategory = index > 0 ? normalizeCategory(sortedAssets[index - 1].type) : '';
+                      const prevCategory = index > 0 ? normalizeCategory(renderAssets[index - 1].type) : '';
                       const showHeader = index === 0 || currentCategory !== prevCategory;
 
-                      const priceData = prices[asset.symbol];
-                      const hasPrice = priceData?.regularMarketPrice != null;
-                      const currentPriceRaw = asset.manualPrice !== undefined ? asset.manualPrice : (hasPrice ? priceData.regularMarketPrice : asset.entryPrice);
-                      
-                      let currentCurrency;
-                      if (asset.manualPrice !== undefined) {
-                        currentCurrency = asset.currency || guessCurrency(asset.symbol);
-                      } else if (hasPrice) {
-                        currentCurrency = priceData.currency || guessCurrency(asset.symbol);
-                        if (typeof asset.symbol === 'string' && asset.symbol.includes('-USD') && currentCurrency === 'INR') currentCurrency = 'USD';
-                      } else {
-                        currentCurrency = asset.currency || guessCurrency(asset.symbol);
-                      }
-                      
-                      const assetCurrency = asset.currency || guessCurrency(asset.symbol);
-                      
-                      const currentPrice = getConvertedPrice(currentPriceRaw, currentCurrency);
-                      const entryPrice = getConvertedPrice(asset.entryPrice, assetCurrency);
-                      
-                      const currentValue = currentPrice * asset.quantity;
-                      const investedValue = entryPrice * asset.quantity;
-                      const pnl = currentValue - investedValue;
-                      const pnlPercent = investedValue > 0 ? (pnl / investedValue) * 100 : 0;
-                      
-                      const getMarketCapCategory = (marketCap?: number) => {
-                        if (!marketCap) return 'N/A';
-                        if (marketCap > 200000000000) return 'Large Cap';
-                        if (marketCap > 50000000000) return 'Mid Cap';
-                        return 'Small Cap';
-                      };
-                      
-                      let displaySector = asset.manualSector;
-                      if (!displaySector) {
-                        const fundData = fundHoldings[asset.symbol];
-                        const sectors = fundData?.sectorWeightings || [];
-                        if (sectors.length > 0) {
-                          const topSector = [...sectors].sort((a, b) => (b.percentage || 0) - (a.percentage || 0))[0];
-                          displaySector = topSector ? `Top: ${topSector.sector}` : 'Diversified';
+                      const renderItem = (item: Asset, isSubItem: boolean = false, isGroupHead: boolean = false) => {
+                        const priceData = prices[item.symbol];
+                        const hasPrice = priceData?.regularMarketPrice != null;
+                        const currentPriceRaw = item.manualPrice !== undefined ? item.manualPrice : (hasPrice ? priceData.regularMarketPrice : item.entryPrice);
+                        
+                        let currentCurrency;
+                        if (item.manualPrice !== undefined) {
+                          currentCurrency = item.currency || guessCurrency(item.symbol);
+                        } else if (hasPrice) {
+                          currentCurrency = priceData.currency || guessCurrency(item.symbol);
+                          if (typeof item.symbol === 'string' && item.symbol.includes('-USD') && currentCurrency === 'INR') currentCurrency = 'USD';
                         } else {
-                          displaySector = priceData?.sector || 'Uncategorized';
+                          currentCurrency = item.currency || guessCurrency(item.symbol);
                         }
-                      }
-                      
-                      const priceSource = priceData?.source;
-                      const sectorSource = asset.manualSector ? 'Manual' : (fundHoldings[asset.symbol]?.source || priceData?.source);
-                      
-                      return (
-                        <Fragment key={asset.id}>
-                          {showHeader && (
-                            <tr 
-                              className="bg-zinc-100/50 dark:bg-zinc-800/30 border-t border-zinc-200 dark:border-zinc-800 cursor-pointer"
-                              onClick={() => setExpandedCategories(prev => ({ ...prev, [currentCategory]: !prev[currentCategory] }))}
-                            >
-                              <td colSpan={7} className="px-6 py-2 text-[10px] font-bold uppercase tracking-widest text-zinc-500 dark:text-zinc-400 flex items-center gap-2">
-                                {expandedCategories[currentCategory] ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-                                {currentCategory}
-                              </td>
-                            </tr>
-                          )}
-                          {expandedCategories[currentCategory] && (
-                            <tr className="hover:bg-zinc-50 dark:hover:bg-zinc-800/50 transition-colors">
-                            <td className="px-6 py-4">
-                              <div className="font-medium text-zinc-900 dark:text-zinc-100">{asset.name}</div>
-                              <div className="text-xs text-zinc-500 mt-1">
-                                {asset.symbol} &bull; {asset.categoryPath ? asset.categoryPath.join(' > ') : normalizeCategory(asset.type)} &bull; {getMarketCapCategory(priceData?.marketCap)} &bull; 
-                                <span className="inline-flex items-center gap-1">
-                                  {displaySector}
-                                  {sectorSource && <span className="text-[8px] opacity-40 italic">({sectorSource})</span>}
+                        
+                        const assetCurrency = item.currency || guessCurrency(item.symbol);
+                        const currentPrice = getConvertedPrice(currentPriceRaw, currentCurrency);
+                        const entryPrice = isGroupHead ? item.entryPrice : getConvertedPrice(item.entryPrice, assetCurrency);
+                        
+                        const currentValue = currentPrice * item.quantity;
+                        const investedValue = entryPrice * item.quantity;
+                        const pnl = currentValue - investedValue;
+                        const pnlPercent = investedValue > 0 ? (pnl / investedValue) * 100 : 0;
+                        
+                        let displaySector = item.manualSector;
+                        if (!displaySector) {
+                          const fundData = fundHoldings[item.symbol];
+                          const sectors = fundData?.sectorWeightings || [];
+                          if (sectors.length > 0) {
+                            const topSector = [...sectors].sort((a, b) => (b.percentage || 0) - (a.percentage || 0))[0];
+                            displaySector = topSector ? `Top: ${topSector.sector}` : 'Diversified';
+                          } else {
+                            displaySector = priceData?.sector || 'Uncategorized';
+                          }
+                        }
+                        
+                        const priceSource = priceData?.source;
+                        const sectorSource = item.manualSector ? 'Manual' : (fundHoldings[item.symbol]?.source || priceData?.source);
+
+                        return (
+                          <tr key={item.id} className={`group/row transition-colors ${isSubItem ? 'bg-zinc-50/50 dark:bg-zinc-900/10 border-l-2 border-blue-500/20' : 'hover:bg-zinc-50 dark:hover:bg-zinc-800/50'}`}>
+                            <td className={`px-6 py-4 ${isSubItem ? 'pl-14' : ''}`}>
+                              <div className="flex items-center gap-2">
+                                {isGroupHead && (
                                   <button 
-                                    onClick={() => {
-                                      const currentSectors = fundHoldings[asset.symbol]?.sectorWeightings || (asset.manualSector ? [{ sector: asset.manualSector, percentage: 100 }] : []);
-                                      setManualSectorModal({ 
-                                        isOpen: true, 
-                                        symbol: asset.symbol, 
-                                        name: asset.name, 
-                                        sectors: currentSectors 
-                                      });
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setExpandedSymbols(prev => ({ ...prev, [item.symbol]: !prev[item.symbol] }));
                                     }}
-                                    className="p-0.5 hover:bg-zinc-200 dark:hover:bg-zinc-700 rounded transition-colors"
-                                    title="Edit Sector Allocation"
+                                    className="p-1 hover:bg-zinc-200 dark:hover:bg-zinc-700 rounded transition-colors text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100"
                                   >
-                                    <Pencil className="w-2.5 h-2.5" />
+                                    {expandedSymbols[item.symbol] ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
                                   </button>
-                                </span>
+                                )}
+                                <div className="flex flex-col">
+                                  <div className="flex items-center gap-2">
+                                    <div className={`font-medium ${isGroupHead ? 'text-blue-600 dark:text-blue-400 font-bold' : 'text-zinc-900 dark:text-zinc-100'}`}>
+                                      {item.name}
+                                      {isGroupHead && <span className="ml-2 text-xs font-normal text-zinc-500"> (Combined)</span>}
+                                    </div>
+                                    {!isGroupHead && item.exchange && (
+                                      <span className="text-[9px] px-1.5 py-0.5 bg-zinc-100 dark:bg-zinc-800 text-zinc-500 rounded border border-zinc-200 dark:border-zinc-700 uppercase font-bold tracking-tight">
+                                        {item.exchange}
+                                      </span>
+                                    )}
+                                    <PriceStatusIndicator 
+                                      lastUpdated={priceData?.lastUpdated} 
+                                      isFetching={isLoadingPrices && !priceData} 
+                                      symbol={item.symbol} 
+                                    />
+                                  </div>
+                                  <div className="text-[10px] text-zinc-500 mt-0.5">
+                                    {item.symbol} &bull; {displaySector}
+                                  </div>
+                                </div>
                               </div>
                             </td>
-                            <td className="px-6 py-4 text-right font-medium">
-                              {asset.quantity.toLocaleString('en-IN')}
+                            <td className="px-6 py-4 text-right font-medium text-zinc-700 dark:text-zinc-300">
+                              {item.quantity.toLocaleString('en-IN', { maximumFractionDigits: 6 })}
                             </td>
                             <td className="px-6 py-4 text-right">
-                              <div className="text-zinc-900 dark:text-zinc-100">{asset.entryPrice.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</div>
-                              <div className="text-xs text-zinc-500">{asset.currency || currentCurrency}</div>
+                              <div className="text-zinc-900 dark:text-zinc-100 font-mono text-xs">
+                                ₹{entryPrice.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                              </div>
                             </td>
                             <td className="px-6 py-4 text-right">
-                              {priceData || asset.manualPrice ? (
+                              {priceData || item.manualPrice ? (
                                 <div className="flex flex-col items-end">
-                                  <div className="flex items-center gap-1">
-                                    <div className="text-zinc-900 dark:text-zinc-100">{currentPriceRaw.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</div>
-                                    {priceSource && <span className="text-[8px] opacity-40 italic">({priceSource})</span>}
-                                    {!hasPrice && (
-                                      <button 
-                                        onClick={() => handleEditAsset(asset)}
-                                        className="p-1 text-zinc-400 hover:text-blue-500 transition-colors"
-                                        title="Set Manual Price"
-                                      >
-                                        <Pencil className="w-3 h-3" />
-                                      </button>
-                                    )}
+                                  <div className="text-zinc-900 dark:text-zinc-100 font-mono text-xs font-bold">
+                                    ₹{currentPrice.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                                   </div>
-                                  <div className="text-[10px] text-zinc-500 flex items-center gap-1">
-                                    {currentCurrency}
-                                    {asset.manualPrice && <span className="bg-zinc-100 dark:bg-zinc-800 px-1 rounded text-zinc-400">Manual</span>}
-                                  </div>
+                                  {priceSource && !isGroupHead && <span className="text-[8px] opacity-40 italic">via {priceSource}</span>}
                                 </div>
-                              ) : (
-                                <div className="flex flex-col items-end">
-                                  <span className="text-zinc-400 text-xs italic">Unavailable</span>
-                                  <button 
-                                    onClick={() => handleEditAsset(asset)}
-                                    className="text-[10px] text-blue-500 hover:underline mt-0.5"
-                                  >
-                                    Set Price
-                                  </button>
-                                </div>
-                              )}
+                              ) : <span className="text-zinc-400 text-xs italic">N/A</span>}
                             </td>
-                            <td className="px-6 py-4 text-right font-medium text-zinc-900 dark:text-zinc-100">
-                              ₹{currentValue.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                            <td className="px-6 py-4 text-right font-mono text-xs text-zinc-500">
+                              ₹{investedValue.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </td>
+                            <td className="px-6 py-4 text-right font-bold text-zinc-900 dark:text-zinc-100 font-mono text-xs">
+                              ₹{currentValue.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                             </td>
                             <td className="px-6 py-4 text-right">
-                              <div className={`font-medium ${pnl >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
+                              <div className={`font-bold text-xs ${pnl >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
                                 {pnl >= 0 ? '+' : ''}₹{pnl.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
                               </div>
-                              <div className={`text-xs ${pnl >= 0 ? 'text-emerald-600/80 dark:text-emerald-400/80' : 'text-red-600/80 dark:text-red-400/80'}`}>
+                              <div className={`text-[10px] ${pnl >= 0 ? 'text-emerald-500/80' : 'text-red-500/80'}`}>
                                 {pnl >= 0 ? '+' : ''}{pnlPercent.toFixed(2)}%
                               </div>
                             </td>
                             <td className="px-6 py-4 text-center">
-                              <div className="flex justify-center gap-1">
+                              {!isGroupHead ? (
+                                <div className="flex justify-center gap-1 opacity-70 lg:opacity-0 group-hover/row:opacity-100 transition-opacity">
+                                  {!item.id.includes('binance-') && !item.id.includes('coindcx-') ? (
+                                    <>
+                                      <button onClick={() => handleEditAsset(item)} className="p-1.5 text-zinc-400 hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded transition-colors" title="Edit"><Pencil className="w-3.5 h-3.5" /></button>
+                                      <button onClick={() => handleDeleteAsset(item.id)} className="p-1.5 text-zinc-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded transition-colors" title="Delete"><Trash2 className="w-3.5 h-3.5" /></button>
+                                    </>
+                                  ) : (
+                                    <div className="text-[10px] text-zinc-400 italic">Exchange Managed</div>
+                                  )}
+                                </div>
+                              ) : (
                                 <button 
-                                  onClick={() => handleEditAsset(asset)}
-                                  className="p-2 text-zinc-400 hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-500/10 rounded-lg transition-colors"
-                                  title="Edit Asset"
+                                  onClick={() => setExpandedSymbols(prev => ({ ...prev, [item.symbol]: !prev[item.symbol] }))}
+                                  className="text-[10px] text-blue-500 hover:underline"
                                 >
-                                  <Pencil className="w-4 h-4" />
+                                  {expandedSymbols[item.symbol] ? 'Hide Details' : 'Show Exchanges'}
                                 </button>
-                                <button 
-                                  onClick={() => handleDeleteAsset(asset.id)}
-                                  className="p-2 text-zinc-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 rounded-lg transition-colors"
-                                  title="Remove Asset"
-                                >
-                                  <Trash2 className="w-4 h-4" />
-                                </button>
-                              </div>
+                              )}
                             </td>
                           </tr>
-                          )}
+                        );
+                      };
+
+
+                      return (
+                        <Fragment key={asset.id}>
+                          {showHeader && (() => {
+                            const isExpanded = expandedCategories[currentCategory];
+                            if (isExpanded) {
+                              return (
+                                <tr 
+                                  className="bg-zinc-100/50 dark:bg-zinc-800/30 border-t border-zinc-200 dark:border-zinc-800 cursor-pointer"
+                                  onClick={() => setExpandedCategories(prev => ({ ...prev, [currentCategory]: !prev[currentCategory] }))}
+                                >
+                                  <td colSpan={8} className="px-6 py-2 text-[10px] font-bold uppercase tracking-widest text-zinc-500 dark:text-zinc-400 flex items-center gap-2">
+                                    <ChevronDown className="w-3 h-3" />
+                                    {currentCategory}
+                                  </td>
+                                </tr>
+                              );
+                            } else {
+                              const stats = portfolioStats.byCategory[currentCategory] || { quantity: 0, currentValue: 0, investedValue: 0 };
+                              const combinedPnl = stats.currentValue - stats.investedValue;
+                              const combinedPnlPercent = stats.investedValue > 0 ? (combinedPnl / stats.investedValue) * 100 : 0;
+                              return (
+                                <tr 
+                                  className="bg-zinc-50/50 dark:bg-zinc-900/50 border-t border-zinc-200 dark:border-zinc-800 cursor-pointer hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50 transition-colors"
+                                  onClick={() => setExpandedCategories(prev => ({ ...prev, [currentCategory]: true }))}
+                                >
+                                  <td className="px-6 py-4 font-bold text-zinc-700 dark:text-zinc-300">
+                                    <div className="flex items-center gap-2"><ChevronRight className="w-4 h-4 text-zinc-400" />{currentCategory}</div>
+                                  </td>
+                                  <td className="px-6 py-4 text-right font-medium text-zinc-500">
+                                    {stats.quantity.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                                  </td>
+                                  <td colSpan={2} className="px-6 py-4"></td>
+                                  <td className="px-6 py-4 text-right font-bold text-zinc-900 dark:text-zinc-100">
+                                    ₹{stats.investedValue.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                                  </td>
+                                  <td className="px-6 py-4 text-right font-bold text-zinc-900 dark:text-zinc-100">
+                                    ₹{stats.currentValue.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                                  </td>
+                                  <td className="px-6 py-4 text-right font-bold">
+                                    <div className={`${combinedPnl >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
+                                      {combinedPnl >= 0 ? '+' : ''}₹{combinedPnl.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                                    </div>
+                                    <div className={`text-xs ${combinedPnl >= 0 ? 'text-emerald-600/80 dark:text-emerald-400/80' : 'text-red-600/80 dark:text-red-400/80'}`}>
+                                      {combinedPnl >= 0 ? '+' : ''}{combinedPnlPercent.toFixed(2)}%
+                                    </div>
+                                  </td>
+                                  <td className="px-6 py-4"></td>
+                                </tr>
+                              );
+                            }
+                          })()}
+
+                          {expandedCategories[currentCategory] && (() => {
+                            const isSmall = isSmallCrypto(asset);
+                            const prevIsSmall = index > 0 && isSmallCrypto(renderAssets[index - 1]);
+                            const isSmallCryptoExpanded = expandedCategories['SmallCrypto'];
+                            const renderRow = !isSmall || isSmallCryptoExpanded;
+                            
+                            return (
+                              <Fragment>
+                                {isSmall && !prevIsSmall && (
+                                  isSmallCryptoExpanded ? (
+                                    <tr 
+                                      className="bg-zinc-100/30 dark:bg-zinc-800/10 border-t border-zinc-200/50 dark:border-zinc-800/50 cursor-pointer"
+                                      onClick={() => setExpandedCategories(prev => ({ ...prev, 'SmallCrypto': !prev['SmallCrypto'] }))}
+                                    >
+                                      <td colSpan={8} className="px-6 py-2 pl-10 text-[10px] font-bold uppercase tracking-widest text-zinc-500 dark:text-zinc-400 flex items-center gap-2">
+                                        <ChevronDown className="w-3 h-3" /> Others (Crypto &lt; ₹10)
+                                      </td>
+                                    </tr>
+                                  ) : (
+                                    <tr 
+                                      className="bg-zinc-50/30 dark:bg-zinc-900/30 border-t border-zinc-200/50 dark:border-zinc-800/50 cursor-pointer hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50 transition-colors"
+                                      onClick={() => setExpandedCategories(prev => ({ ...prev, 'SmallCrypto': true }))}
+                                    >
+                                      <td className="px-6 py-3 pl-10 font-bold text-zinc-600 dark:text-zinc-400">
+                                        <div className="flex items-center gap-2 text-xs"><ChevronRight className="w-3 h-3 text-zinc-400" /> Others (Crypto &lt; ₹10)</div>
+                                      </td>
+                                      <td className="px-6 py-3 text-right font-medium text-zinc-500 text-xs">{portfolioStats.smallCryptoStats.quantity.toLocaleString('en-IN')}</td>
+                                      <td colSpan={2} className="px-6 py-3"></td>
+                                      <td className="px-6 py-3 text-right font-bold text-zinc-700 dark:text-zinc-300 text-xs">₹{portfolioStats.smallCryptoStats.investedValue.toLocaleString('en-IN')}</td>
+                                      <td className="px-6 py-3 text-right font-bold text-zinc-700 dark:text-zinc-300 text-xs">₹{portfolioStats.smallCryptoStats.currentValue.toLocaleString('en-IN')}</td>
+                                      <td className="px-6 py-3 text-right font-bold text-xs">
+                                        <div className={`${(portfolioStats.smallCryptoStats.currentValue - portfolioStats.smallCryptoStats.investedValue) >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
+                                          {(portfolioStats.smallCryptoStats.currentValue - portfolioStats.smallCryptoStats.investedValue) >= 0 ? '+' : ''}₹{(portfolioStats.smallCryptoStats.currentValue - portfolioStats.smallCryptoStats.investedValue).toLocaleString('en-IN')}
+                                        </div>
+                                      </td>
+                                      <td className="px-6 py-3"></td>
+                                    </tr>
+                                  )
+                                )}
+                                {renderRow && (
+                                  <Fragment>
+                                    {renderItem(asset, false, asset.isGroup)}
+                                    {asset.isGroup && expandedSymbols[asset.symbol] && (asset.subItems || []).map(sub => (
+                                      <Fragment key={sub.id}>
+                                        {renderItem(sub, true, false)}
+                                      </Fragment>
+                                    ))}
+                                  </Fragment>
+                                )}
+                              </Fragment>
+                            );
+                          })()}
                         </Fragment>
                       );
                     })
                   )}
-                  {assets.length > 0 && (
+                  {mergedAssets.length > 0 && (
                     <Fragment>
                       <tr 
                         className="bg-zinc-100 dark:bg-zinc-900 font-bold border-t-2 border-zinc-200 dark:border-zinc-800 cursor-pointer hover:bg-zinc-200 dark:hover:bg-zinc-800 transition-colors"
@@ -3503,10 +4148,13 @@ export default function Dashboard() {
                           Total Portfolio
                         </td>
                         <td className="px-6 py-4 text-right">
-                          {assets.reduce((sum, a) => sum + a.quantity, 0).toLocaleString('en-IN')}
+                          {mergedAssets.reduce((sum, a) => sum + a.quantity, 0).toLocaleString('en-IN')}
                         </td>
                         <td className="px-6 py-4 text-right"></td>
                         <td className="px-6 py-4 text-right"></td>
+                        <td className="px-6 py-4 text-right">
+                          ₹{portfolioStats.investedValue.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                        </td>
                         <td className="px-6 py-4 text-right">
                           ₹{portfolioStats.currentValue.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
                         </td>
@@ -3520,7 +4168,7 @@ export default function Dashboard() {
                       </tr>
                       {expandedCategories['Total Portfolio'] && (
                         <tr className="bg-zinc-50 dark:bg-zinc-950/50">
-                          <td colSpan={7} className="px-6 py-6">
+                          <td colSpan={8} className="px-6 py-6">
                             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                               {/* Summary Stats */}
                               <div className="p-4 bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm">
@@ -3549,7 +4197,7 @@ export default function Dashboard() {
                               <h4 className="text-xs font-bold uppercase tracking-widest text-zinc-500 mb-4 px-1">Category Breakdown</h4>
                               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                                 {Object.entries(
-                                  assets.reduce((acc, asset) => {
+                                  mergedAssets.reduce((acc, asset) => {
                                     const cat = normalizeCategory(asset.type);
                                     if (!acc[cat]) acc[cat] = { currentValue: 0, investedValue: 0 };
                                     
@@ -3679,7 +4327,7 @@ export default function Dashboard() {
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
                   <input 
                     type="text" 
-                    className="w-full pl-9 pr-4 py-2.5 border border-zinc-300 dark:border-zinc-700 rounded-xl bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 focus:ring-2 focus:ring-blue-500 outline-none transition-shadow"
+                    className="w-full pl-9 pr-10 py-2.5 border border-zinc-300 dark:border-zinc-700 rounded-xl bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 focus:ring-2 focus:ring-blue-500 outline-none transition-shadow"
                     placeholder="e.g. Reliance, TCS, BTC-USD, Gold"
                     value={searchQuery}
                     onChange={(e) => {
@@ -3687,30 +4335,45 @@ export default function Dashboard() {
                       if (selectedResult) setSelectedResult(null);
                     }}
                   />
+                  {searchQuery && (
+                    <button 
+                      onClick={() => {
+                        setSearchQuery('');
+                        setSearchResults([]);
+                        if (selectedResult) setSelectedResult(null);
+                      }}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-zinc-600 p-1 rounded-full transition-colors"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
                 </div>
                 
                 {isSearching && <div className="text-sm text-zinc-500 mt-2 px-1">Searching...</div>}
                 
                 {searchResults.length > 0 && !selectedResult && (
-                  <ul className="mt-2 border border-zinc-200 dark:border-zinc-700 rounded-xl max-h-48 overflow-y-auto bg-white dark:bg-zinc-950 shadow-sm divide-y divide-zinc-100 dark:divide-zinc-800">
+                  <ul className="mt-2 border border-zinc-200 dark:border-zinc-700 rounded-xl max-h-80 overflow-y-auto bg-white dark:bg-zinc-950 shadow-sm divide-y divide-zinc-100 dark:divide-zinc-800">
                     {searchResults.map((res, idx) => (
                       <li 
                         key={`${res.symbol}-${res.source || 'y'}-${idx}`} 
-                        className="px-4 py-3 hover:bg-zinc-50 dark:hover:bg-zinc-800 cursor-pointer flex justify-between items-center transition-colors"
+                        className="px-4 py-3 hover:bg-zinc-50 dark:hover:bg-zinc-800 cursor-pointer flex justify-between items-start transition-colors gap-3"
                         onClick={() => {
                           setSelectedResult(res);
                           setSearchQuery(res.shortname || res.longname || res.symbol);
                           setSearchResults([]);
                         }}
                       >
-                        <div className="overflow-hidden pr-2">
-                          <div className="font-medium text-zinc-900 dark:text-zinc-100 truncate">{res.shortname || res.longname}</div>
-                          <div className="text-xs text-zinc-500 mt-0.5">
-                            {res.exchDisp} &bull; {res.typeDisp}
-                            {res.source && <span className="ml-1 opacity-60 italic">({res.source})</span>}
+                        <div className="flex-1 min-w-0">
+                          <div className="font-medium text-zinc-900 dark:text-zinc-100 leading-snug" title={res.longname || res.shortname}>
+                            {res.shortname || res.longname}
+                          </div>
+                          <div className="text-xs text-zinc-500 mt-1 flex flex-wrap gap-x-2 gap-y-0.5">
+                            <span className="font-semibold text-zinc-400 uppercase">{res.quoteType || res.typeDisp}</span>
+                            <span>&bull;</span>
+                            <span>{res.exchDisp || res.source}</span>
                           </div>
                         </div>
-                        <div className="text-sm font-semibold text-zinc-700 dark:text-zinc-300 bg-zinc-100 dark:bg-zinc-800 px-2 py-1 rounded-md whitespace-nowrap">
+                        <div className="text-[10px] font-bold text-zinc-500 dark:text-zinc-400 bg-zinc-100 dark:bg-zinc-800 px-2 py-1 rounded border border-zinc-200 dark:border-zinc-700 whitespace-nowrap self-start">
                           {res.symbol}
                         </div>
                       </li>
@@ -3721,10 +4384,14 @@ export default function Dashboard() {
 
               {selectedResult && (
                 <div className="p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800/50 rounded-xl">
-                  <div className="flex justify-between items-center">
-                    <div className="overflow-hidden pr-2">
-                      <div className="font-medium text-blue-900 dark:text-blue-100 truncate">{selectedResult.shortname || selectedResult.longname}</div>
-                      <div className="text-xs text-blue-700 dark:text-blue-300 mt-0.5">{selectedResult.symbol}</div>
+                  <div className="flex justify-between items-start gap-4">
+                    <div className="flex-1 min-w-0">
+                      <div className="font-semibold text-blue-900 dark:text-blue-100 leading-tight">
+                        {selectedResult.shortname || selectedResult.longname}
+                      </div>
+                      <div className="text-[10px] text-blue-700 dark:text-blue-300 mt-1 font-mono uppercase tracking-wider">
+                        {selectedResult.symbol} &bull; {selectedResult.quoteType || selectedResult.typeDisp}
+                      </div>
                     </div>
                     <button 
                       onClick={() => {
@@ -3740,7 +4407,7 @@ export default function Dashboard() {
                     </button>
                   </div>
                   
-                  {assets.find(a => a.symbol === selectedResult.symbol) && !editingAssetId && (
+                  {findExistingAssetToMerge(selectedResult) && !editingAssetId && (
                     <div className="mt-3 p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800/50 rounded-lg">
                       <div className="flex items-start gap-2">
                         <div className="text-amber-600 dark:text-amber-400 mt-0.5">
@@ -3756,14 +4423,14 @@ export default function Dashboard() {
                                 <div className="p-1.5 bg-white/50 dark:bg-black/20 rounded border border-amber-100 dark:border-amber-900/30">
                                   <div className="text-[10px] text-zinc-500">New Quantity</div>
                                   <div className="text-xs font-bold text-zinc-900 dark:text-zinc-100">
-                                    {(assets.find(a => a.symbol === selectedResult.symbol)?.quantity || 0) + parseFloat(quantity)}
+                                    {(findExistingAssetToMerge(selectedResult)?.quantity || 0) + parseFloat(quantity)}
                                   </div>
                                 </div>
                                 <div className="p-1.5 bg-white/50 dark:bg-black/20 rounded border border-amber-100 dark:border-amber-900/30">
                                   <div className="text-[10px] text-zinc-500">New Avg Price</div>
                                   <div className="text-xs font-bold text-zinc-900 dark:text-zinc-100">
                                     {(() => {
-                                      const existing = assets.find(a => a.symbol === selectedResult.symbol);
+                                      const existing = findExistingAssetToMerge(selectedResult);
                                       if (!existing) return '0';
                                       
                                       const newQty = parseFloat(quantity);
@@ -3792,7 +4459,7 @@ export default function Dashboard() {
                           ) : (
                             <button 
                               onClick={() => {
-                                const existing = assets.find(a => a.symbol === selectedResult.symbol);
+                                const existing = findExistingAssetToMerge(selectedResult);
                                 if (existing) {
                                   setEditingAssetId(existing.id);
                                   setQuantity(existing.quantity.toString());
@@ -3975,7 +4642,7 @@ export default function Dashboard() {
                 <select
                   value={aiProvider}
                   onChange={(e) => {
-                    const val = e.target.value as 'openrouter' | 'google';
+                    const val = e.target.value as 'openrouter' | 'google' | 'huggingface';
                     setAiProvider(val);
                     syncToDb({ settings: { aiProvider: val } });
                   }}
@@ -3983,6 +4650,7 @@ export default function Dashboard() {
                 >
                   <option value="openrouter">OpenRouter</option>
                   <option value="google">Google Gemini (Built-in)</option>
+                  <option value="huggingface">Hugging Face (Gemma 4/2)</option>
                 </select>
               </div>
 
@@ -4049,6 +4717,63 @@ export default function Dashboard() {
                 </>
               )}
 
+              {aiProvider === 'huggingface' && (
+                <>
+                  <div>
+                    <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1.5">Hugging Face API Token</label>
+                    <input 
+                      type="password" 
+                      className="w-full px-4 py-2.5 border border-zinc-300 dark:border-zinc-700 rounded-xl bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 focus:ring-2 focus:ring-blue-500 outline-none transition-shadow"
+                      placeholder="hf_..."
+                      defaultValue={huggingFaceKey}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') saveHuggingFaceKey(e.currentTarget.value);
+                      }}
+                      onBlur={(e) => saveHuggingFaceKey(e.target.value)}
+                    />
+                    <p className="text-xs text-zinc-500 mt-2">
+                      Required for HF Inference API. Get one at <a href="https://huggingface.co/settings/tokens" target="_blank" rel="noreferrer" className="text-blue-500 hover:underline">huggingface.co</a>.
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1.5">HF Model ID</label>
+                    <select
+                      value={['google/gemma-2-27b-it', 'google/gemma-2-9b-it', 'google/gemma-2-2b-it', 'google/gemma-7b-it'].includes(huggingFaceModel) ? huggingFaceModel : 'custom'}
+                      onChange={(e) => {
+                        if (e.target.value === 'custom') {
+                          setHuggingFaceModel('');
+                          syncToDb({ settings: { huggingFaceModel: '' } });
+                        } else {
+                          setHuggingFaceModel(e.target.value);
+                          syncToDb({ settings: { huggingFaceModel: e.target.value } });
+                        }
+                      }}
+                      className="w-full px-4 py-2.5 border border-zinc-300 dark:border-zinc-700 rounded-xl bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 focus:ring-2 focus:ring-blue-500 outline-none transition-shadow appearance-none"
+                    >
+                      <option value="google/gemma-2-27b-it">Gemma 2 27B IT</option>
+                      <option value="google/gemma-2-9b-it">Gemma 2 9B IT</option>
+                      <option value="google/gemma-2-2b-it">Gemma 2 2B IT</option>
+                      <option value="google/gemma-7b-it">Gemma 1 7B IT (Legacy)</option>
+                      <option value="custom">Custom HF Model ID...</option>
+                    </select>
+                    {!['google/gemma-2-27b-it', 'google/gemma-2-9b-it', 'google/gemma-2-2b-it', 'google/gemma-7b-it'].includes(huggingFaceModel) && (
+                       <input
+                       type="text"
+                       placeholder="e.g., google/gemma-2-27b-it"
+                       value={huggingFaceModel}
+                       onChange={(e) => {
+                         setHuggingFaceModel(e.target.value);
+                         syncToDb({ settings: { huggingFaceModel: e.target.value } });
+                       }}
+                       className="w-full mt-2 px-4 py-2.5 border border-zinc-300 dark:border-zinc-700 rounded-xl bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 focus:ring-2 focus:ring-blue-500 outline-none transition-shadow"
+                       autoFocus
+                     />
+                    )}
+                  </div>
+                </>
+              )}
+
               {aiProvider === 'google' && (
                 <div>
                   <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1.5">Gemini Model</label>
@@ -4089,9 +4814,22 @@ export default function Dashboard() {
                     />
                   </label>
                 </div>
-                <p className="text-xs text-zinc-500 mt-2">
+                <p className="text-xs text-zinc-500 mt-2 text-center">
                   Export your portfolio data to transfer it to a different Google account.
                 </p>
+                <div className="mt-3 flex flex-col gap-2">
+                  <button
+                    onClick={handleRestoreFromMongo}
+                    className="w-full px-4 py-2 bg-zinc-100 hover:bg-zinc-200 dark:bg-zinc-800 dark:hover:bg-zinc-700 text-zinc-900 dark:text-zinc-100 rounded-xl font-medium transition-colors text-sm text-center relative overflow-hidden"
+                  >
+                    Restore from MongoDB Backup
+                    {restoreStatus && (
+                      <div className={`absolute inset-0 flex items-center justify-center font-medium ${restoreStatus.isError ? 'bg-red-50 text-red-600 dark:bg-red-900/40 dark:text-red-400' : 'bg-emerald-50 text-emerald-600 dark:bg-emerald-900/40 dark:text-emerald-400'}`}>
+                        {restoreStatus.message}
+                      </div>
+                    )}
+                  </button>
+                </div>
               </div>
 
               <div className="pt-4 border-t border-zinc-200 dark:border-zinc-800">

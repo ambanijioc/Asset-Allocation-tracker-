@@ -1,6 +1,34 @@
 import { NextResponse } from 'next/server';
 import clientPromise from '@/lib/mongodb';
 
+export async function GET(request: Request) {
+  try {
+    const { searchParams } = new URL(request.url);
+    const uid = searchParams.get('uid');
+
+    if (!uid) {
+      return NextResponse.json({ success: false, error: 'Missing UID' }, { status: 400 });
+    }
+
+    if (!clientPromise) {
+      return NextResponse.json({ success: false, error: 'MongoDB not configured' }, { status: 503 });
+    }
+
+    const client = await clientPromise;
+    const db = client.db('portfolio_tracker');
+
+    const userDoc = await db.collection('users').findOne({ uid: uid });
+
+    if (!userDoc) {
+      return NextResponse.json({ success: false, error: 'No backup found in MongoDB' }, { status: 404 });
+    }
+
+    return NextResponse.json({ success: true, data: userDoc });
+  } catch (e) {
+    return NextResponse.json({ success: false, error: String(e) }, { status: 500 });
+  }
+}
+
 export async function POST(request: Request) {
   try {
     const body = await request.json();
@@ -8,6 +36,10 @@ export async function POST(request: Request) {
 
     if (!uid) {
       return NextResponse.json({ success: false, error: 'Missing UID' }, { status: 400 });
+    }
+
+    if (!clientPromise) {
+      return NextResponse.json({ success: false, error: 'MongoDB not configured' }, { status: 503 });
     }
 
     const client = await clientPromise;
