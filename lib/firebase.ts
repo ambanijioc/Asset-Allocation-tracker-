@@ -1,28 +1,11 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
-import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, createUserWithEmailAndPassword, signInWithEmailAndPassword, sendPasswordResetEmail as firebaseSendPasswordResetEmail } from 'firebase/auth';
-import { getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot, getDocFromServer, setLogLevel } from 'firebase/firestore';
+import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, createUserWithEmailAndPassword, signInWithEmailAndPassword, sendPasswordResetEmail } from 'firebase/auth';
+import { getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot } from 'firebase/firestore';
 import firebaseConfig from '../firebase-applet-config.json';
-
-// Silence benign Firestore stream warnings
-setLogLevel('error');
 
 const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
 export const auth = getAuth(app);
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
-
-// Test Firestore connection on boot
-(async () => {
-  try {
-    // Only test if we have a config and are in a browser-like environment (if needed, but Next.js handle this)
-    await getDocFromServer(doc(db, 'test', 'connection')).catch(e => {
-        if (e.message.includes('the client is offline') || e.message.includes('Could not reach Cloud Firestore')) {
-            console.warn("Firestore: Initial connection attempt timed out or offline. This is common during environment startup.");
-        }
-    });
-  } catch (error) {
-    console.warn("Firestore initial connection test warning (can be ignored if app functionality works):", error);
-  }
-})();
 
 export const googleProvider = new GoogleAuthProvider();
 
@@ -56,9 +39,9 @@ export const signInWithEmail = async (email: string, password: string) => {
   }
 };
 
-export const sendPasswordResetEmail = async (email: string) => {
+export const resetPassword = async (email: string) => {
   try {
-    await firebaseSendPasswordResetEmail(auth, email);
+    await sendPasswordResetEmail(auth, email);
   } catch (error) {
     console.error("Error sending password reset email", error);
     throw error;

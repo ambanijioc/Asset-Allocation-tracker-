@@ -5,7 +5,7 @@ import { Plus, Search, Trash2, RefreshCw, TrendingUp, TrendingDown, DollarSign, 
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RechartsTooltip, Legend, Treemap, BarChart, Bar, XAxis, YAxis, CartesianGrid } from 'recharts';
 import { v4 as uuidv4 } from 'uuid';
 import { GoogleGenAI, Type, ThinkingLevel } from '@google/genai';
-import { auth, db, signInWithGoogle, signInWithEmail, signUpWithEmail, sendPasswordResetEmail, logOut, handleFirestoreError, OperationType } from '@/lib/firebase';
+import { auth, db, signInWithGoogle, signInWithEmail, signUpWithEmail, resetPassword, logOut, handleFirestoreError, OperationType } from '@/lib/firebase';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { doc, setDoc, updateDoc, onSnapshot, getDoc } from 'firebase/firestore';
 import Screener from '@/components/Screener';
@@ -160,7 +160,6 @@ const PriceStatusIndicator = ({ lastUpdated, isFetching, symbol }: { lastUpdated
 
 export default function Dashboard() {
   const [assets, setAssets] = useState<Asset[]>([]);
-  const [isFirestoreOffline, setIsFirestoreOffline] = useState(false);
   const [binanceAssets, setBinanceAssets] = useState<Asset[]>([]);
   const [coindcxAssets, setCoindcxAssets] = useState<Asset[]>([]);
   const [prices, setPrices] = useState<Record<string, PriceData>>({});
@@ -179,6 +178,7 @@ export default function Dashboard() {
   const [sortConfig, setSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' | null }>({ key: 'currentValue', direction: 'desc' });
   const [quantity, setQuantity] = useState('');
   const [entryPrice, setEntryPrice] = useState('');
+  const [investedValueInput, setInvestedValueInput] = useState('');
   const [manualPrice, setManualPrice] = useState('');
   const [manualSector, setManualSector] = useState('');
   const [entryCurrency, setEntryCurrency] = useState('INR');
@@ -197,7 +197,6 @@ export default function Dashboard() {
 
   // AI State
   const [openRouterKey, setOpenRouterKey] = useState('');
-  const [huggingFaceKey, setHuggingFaceKey] = useState('');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [restoreStatus, setRestoreStatus] = useState<{message: string, isError: boolean} | null>(null);
   const [isAllocationSettingsOpen, setIsAllocationSettingsOpen] = useState(false);
@@ -212,13 +211,23 @@ export default function Dashboard() {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([{ role: 'assistant', content: 'Hi! I can help you manage your portfolio. Try saying "Add 10 shares of Apple at $150" or "Remove Reliance".' }]);
   const [aiInput, setAiInput] = useState('');
   const [isAiTyping, setIsAiTyping] = useState(false);
-  const [aiProvider, setAiProvider] = useState<'openrouter' | 'google' | 'huggingface'>('google');
+  const [aiProvider, setAiProvider] = useState<'openrouter' | 'google'>('google');
   const [searchSource, setSearchSource] = useState<'indianapi' | 'yahoo' | 'newapi' | 'tickertape'>('tickertape');
   const [availableModels, setAvailableModels] = useState<any[]>([]);
   const [selectedModel, setSelectedModel] = useState('meta-llama/llama-3.3-70b-instruct:free');
   const [googleModel, setGoogleModel] = useState('gemini-3.1-flash-lite-preview');
-  const [huggingFaceModel, setHuggingFaceModel] = useState('google/gemma-2-27b-it');
   const [activeTab, setActiveTab] = useState<'portfolio' | 'screener'>('portfolio');
+
+  const getRunningOperations = () => {
+    const operations = [];
+    if (isLoadingPrices) operations.push('Updating Prices');
+    if (isSearching) operations.push('Searching');
+    if (isAiTyping) operations.push('AI Thinking');
+    const loadingHoldingsValues = Object.values(loadingHoldings.current);
+    if (loadingHoldingsValues.some(v => v)) operations.push('Loading Holdings');
+    return operations;
+  };
+  const runningOperations = getRunningOperations();
 
   // Auth State
   const [user, setUser] = useState<User | null>(null);
@@ -295,7 +304,7 @@ export default function Dashboard() {
     setIsSigningIn(true);
     setAuthError('');
     try {
-      await sendPasswordResetEmail(emailAuthInput);
+      await resetPassword(emailAuthInput);
       setAuthError('Password reset email sent. Please check your inbox.');
       setIsResetMode(false);
     } catch (err: any) {
@@ -326,13 +335,23 @@ export default function Dashboard() {
 
   const normalizeCategory = (category?: string) => {
     if (!category) return 'Unknown';
-    const upper = category.toUpperCase();
+    if (category.includes('>')) return category;
+    const upper = category.toUpperCase().trim();
     if (upper === 'EQUITY' || upper === 'STOCK') return 'Equities';
     if (upper === 'MUTUALFUND' || upper === 'ETF') return 'Mutual Funds';
     if (upper === 'CRYPTOCURRENCY' || upper === 'CRYPTO') return 'Crypto';
     if (upper === 'DEBT' || upper === 'FIXED INCOME') return 'Fixed Income';
     if (upper === 'CASH') return 'Cash';
+    if (upper === 'GOLD' || upper === 'SILVER' || upper === 'COMMODITY' || upper === 'COMMODITIES') return 'Commodities';
     return category;
+  };
+
+  const getCommoditySubCategory = (asset: { name: string; symbol: string }) => {
+    const name = asset.name.toLowerCase();
+    const symbol = asset.symbol.toLowerCase();
+    if (name.includes('gold') || symbol.includes('gold')) return 'Gold';
+    if (name.includes('silver') || symbol.includes('silver')) return 'Silver';
+    return 'Other Commodities';
   };
 
   const isSmallCrypto = (asset: Asset) => {
@@ -422,8 +441,6 @@ export default function Dashboard() {
               idealAllocation,
               searchSource,
               openRouterKey,
-              huggingFaceKey,
-              huggingFaceModel,
               aiProvider,
               googleModel,
               openrouterModel: selectedModel,
@@ -474,82 +491,47 @@ export default function Dashboard() {
     
     // Helper to generic exchange fetch
     const fetchExchange = async (url: string, setter: (assets: Asset[]) => void, exchangeName: string) => {
-      let retries = 6;
-      let success = false;
-      
-      while (retries > 0 && !success) {
+      try {
+        const res = await fetch(url);
+        const text = await res.text();
+        let data;
         try {
-          const res = await fetch(url).catch(e => {
-            if (e.message.includes('fetch') || e.name === 'TypeError') {
-               return { ok: false, status: 0, text: () => Promise.resolve('Failed to fetch') } as any;
-            }
-            throw e;
-          });
-          
-          if (!res.ok) {
-            const text = await res.text().catch(() => 'No body');
-            
-            // Special handling for temporary service unavailability
-            if (res.status === 503 || res.status === 429 || text.includes('Starting Server') || text.includes('Failed to fetch') || res.status === 0) {
-              const backoff = (7 - retries) * 4000; // Exponential-ish backoff
-              console.log(`${exchangeName}: Status ${res.status} (Temporary), waiting ${backoff/1000}s... (${retries} left)`);
-              await new Promise(r => setTimeout(r, backoff));
-              retries--;
-              continue;
-            }
-            
-            console.warn(`${exchangeName} API status ${res.status}: ${text.substring(0, 100)}`);
-            throw new Error(`Status ${res.status}`);
-          }
-
-          const contentType = res.headers.get('content-type');
-          if (!contentType || !contentType.includes('application/json')) {
-            const text = await res.text().catch(() => 'No body');
-            if (text.includes('Starting Server')) {
-              console.log(`${exchangeName}: Server starting, waiting...`);
-              await new Promise(r => setTimeout(r, 8000));
-              retries--;
-              continue;
-            }
-            throw new Error(`Non-JSON content: ${contentType}`);
-          }
-
-          const data = await res.json();
-          if (Array.isArray(data)) {
-            setter(data.map((a: any) => ({
-              ...a,
-              id: `${exchangeName.toLowerCase()}-${a.name}`,
-              entryPrice: 0,
-              currency: 'USD'
-            })));
-
-            setPrices(prev => {
-              const newPrices = { ...prev };
-              data.forEach((crypto: any) => {
-                if (crypto.currentPrice) {
-                  newPrices[crypto.symbol] = {
-                    symbol: crypto.symbol,
-                    regularMarketPrice: crypto.currentPrice,
-                    currency: 'USD',
-                    shortName: crypto.name,
-                    quoteType: 'CRYPTO',
-                    source: `${exchangeName} API`,
-                    lastUpdated: Date.now()
-                  };
-                }
-              });
-              return newPrices;
-            });
-            success = true;
-          } else {
-            console.error(`Failed to fetch ${exchangeName} assets:`, data.error);
-            success = true; // Don't retry on logical errors
-          }
-        } catch (err: any) {
-          console.error(`Fetch ${exchangeName} error (Attempt ${6 - retries}):`, err.message || err);
-          retries--;
-          if (retries > 0) await new Promise(r => setTimeout(r, 4000));
+          data = JSON.parse(text);
+        } catch (e) {
+          console.error(`${exchangeName} fetch error:\nUnexpected token '<', "${text.substring(0, 15)}"... is not valid JSON`);
+          return;
         }
+
+        if (Array.isArray(data)) {
+          setter(data.map((a: any) => ({
+            ...a,
+            id: `${exchangeName.toLowerCase()}-${a.name}`,
+            entryPrice: 0,
+            currency: 'USD'
+          })));
+
+          setPrices(prev => {
+            const newPrices = { ...prev };
+            data.forEach((crypto: any) => {
+              if (crypto.currentPrice) {
+                newPrices[crypto.symbol] = {
+                  symbol: crypto.symbol,
+                  regularMarketPrice: crypto.currentPrice,
+                  currency: 'USD',
+                  shortName: crypto.name,
+                  quoteType: 'CRYPTO',
+                  source: `${exchangeName} API`,
+                  lastUpdated: Date.now()
+                };
+              }
+            });
+            return newPrices;
+          });
+        } else {
+          console.error(`Failed to fetch ${exchangeName} assets:`, data?.error || 'Unknown format');
+        }
+      } catch (err) {
+        console.error(`${exchangeName} fetch error:`, err);
       }
     };
 
@@ -562,7 +544,6 @@ export default function Dashboard() {
 
     const userRef = doc(db, 'users', user.uid);
     const unsubscribe = onSnapshot(userRef, async (docSnap) => {
-      setIsFirestoreOffline(false);
       if (docSnap.exists()) {
         const data = docSnap.data();
         if (data.assets) setAssets(data.assets);
@@ -602,8 +583,6 @@ export default function Dashboard() {
           }
           if (data.settings.searchSource) setSearchSource(data.settings.searchSource);
           if (data.settings.openRouterKey) setOpenRouterKey(data.settings.openRouterKey);
-          if (data.settings.huggingFaceKey) setHuggingFaceKey(data.settings.huggingFaceKey);
-          if (data.settings.huggingFaceModel) setHuggingFaceModel(data.settings.huggingFaceModel);
           if (data.settings.aiProvider) setAiProvider(data.settings.aiProvider);
           if (data.settings.googleModel) {
             const validModels = ['gemini-3.1-flash-lite-preview', 'gemini-3.1-pro-preview', 'gemini-flash-latest'];
@@ -651,21 +630,7 @@ export default function Dashboard() {
         }
       }
     }, (error) => {
-      // Suppress the benign "Disconnecting idle stream" warning which is common in idle serverless environments
-      if (error.message.includes('Disconnecting idle stream') || error.message.includes('Timed out waiting for new targets')) {
-        return;
-      }
-      
-      console.warn("Firestore snapshot error detected:", error.message);
-      if (error.message.includes('offline') || error.message.includes('backend') || error.message.includes('Internet connection')) {
-        setIsFirestoreOffline(true);
-      }
-      // handleFirestoreError throws, so keep it last or wrapped if we want more logic
-      try {
-        handleFirestoreError(error, OperationType.GET, `users/${user.uid}`);
-      } catch (e) {
-        // Logged by handleFirestoreError
-      }
+      handleFirestoreError(error, OperationType.GET, `users/${user.uid}`);
     });
 
     return () => unsubscribe();
@@ -764,7 +729,7 @@ export default function Dashboard() {
     });
   }, [assets, fundHoldings]);
 
-  const fetchPrices = useCallback(async (forceRefresh = false) => {
+  const fetchPrices = useCallback(async (forceRefresh = false, specificSymbols?: string[]) => {
     if (assets.length === 0) return;
     
     setIsLoadingPrices(true);
@@ -783,8 +748,16 @@ export default function Dashboard() {
 
       let symbols = Array.from(symbolsSet);
       
-      if (!forceRefresh) {
+      if (specificSymbols) {
+        symbols = symbols.filter(s => specificSymbols.includes(s));
+      } else if (!forceRefresh) {
         symbols = symbols.filter(s => !pricesRef.current[s]);
+      } else {
+        symbols = symbols.filter(s => {
+          if (!pricesRef.current[s]) return true;
+          if (s === 'GOLD-INR-GRAM' || s === 'SILVER-INR-GRAM') return false;
+          return true;
+        });
       }
 
       if (symbols.length === 0) {
@@ -796,59 +769,45 @@ export default function Dashboard() {
       
       const chunkSize = 8;
       for (let i = 0; i < symbols.length; i += chunkSize) {
-        // Wait briefly between chunks
-        if (i > 0) await new Promise(r => setTimeout(r, 600));
+        // Wait between chunks to prevent overwhelming the API
+        if (i > 0) await new Promise(r => setTimeout(r, 1200));
         
         const chunk = symbols.slice(i, i + chunkSize);
         
-        let retries = 6; 
+        let retries = 5; // Increased retries
         let success = false;
         
         while (retries >= 0 && !success) {
           const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 45000); // 45s timeout per chunk
+          const timeoutId = setTimeout(() => controller.abort(), 20000); // 20s timeout per chunk
           
           try {
             const res = await fetch(`/api/price?symbols=${encodeURIComponent(chunk.join(','))}${forceRefresh ? '&refresh=true' : ''}`, {
               signal: controller.signal
-            }).catch(e => {
-              // Specifically handle "Failed to fetch" which is often a network/boot issue
-              if (e.message.includes('fetch') || e.name === 'TypeError') {
-                 return { ok: false, status: 0, text: () => Promise.resolve('Failed to fetch') } as any;
-              }
-              throw e;
             });
             clearTimeout(timeoutId);
             
             if (!res.ok) {
               const errBody = await res.text().catch(() => 'No body');
-              if (errBody.includes('Failed to fetch') || errBody.includes('Starting Server') || res.status === 0) {
-                console.log('Network error or server booting, waiting...');
-                await new Promise(r => setTimeout(r, 9000));
-                retries--;
-                continue;
-              }
-              throw new Error(`Price API status ${res.status}: ${errBody.substring(0, 100)}`);
+              const error = new Error(`Price API status ${res.status}: ${errBody.substring(0, 100)}`);
+              (error as any).status = res.status;
+              throw error;
             }
 
             const contentType = res.headers.get('content-type');
+            const text = await res.text();
+            
             if (!contentType || !contentType.includes('application/json')) {
-              const text = await res.text();
-              console.error(`Non-JSON content-type: ${contentType}. Body: ${text.substring(0, 200)}`);
-              
-              // If we see "Starting Server", it means the dev environment is booting up.
-              // We should wait longer and retry.
-              if (text.includes('Starting Server')) {
-                console.log('Server is starting up, waiting before retry...');
-                await new Promise(r => setTimeout(r, 9000));
-                retries--;
-                continue;
+              const isHtml = text.trim().startsWith('<');
+              if (!isHtml) {
+                console.error(`Non-JSON content-type: ${contentType}. Body: ${text.substring(0, 200)}`);
               }
-              
-              throw new Error(`Non-JSON content-type: ${contentType}`);
+              const error = new Error(`Non-JSON content-type: ${contentType}`);
+              (error as any).isHtml = isHtml;
+              throw error;
             }
 
-            const data = await res.json();
+            const data = JSON.parse(text);
             if (Array.isArray(data)) {
               data.forEach((item: any) => {
                 newPrices[item.symbol] = {
@@ -868,10 +827,22 @@ export default function Dashboard() {
           } catch (err: any) {
             clearTimeout(timeoutId);
             const isTimeout = err.name === 'AbortError';
-            console.error(`Attempt ${4 - retries} failed for chunk ${i} (Symbols: ${chunk.join(', ')}) (${isTimeout ? 'Timeout' : 'Error'}):`, err.message || err);
+            const isHtml = err.isHtml;
+            
+            if (!isHtml) {
+              console.error(`Attempt ${6 - retries} failed for chunk ${i} (Symbols: ${chunk.join(', ')}) (${isTimeout ? 'Timeout' : 'Error'}):`, err.message || err);
+            }
             
             retries--;
-            if (retries >= 0) await new Promise(r => setTimeout(r, 3000)); // Increased backoff
+            if (retries >= 0) {
+                // If it's a HTML response (likely "Starting Server...") or 503 (Server Unavailable), wait longer
+                const isSlowResponse = isHtml || err.status === 503;
+                const backoff = isSlowResponse ? 15000 : 5000;
+                if (!isHtml) console.log(`Retrying in ${backoff}ms...`);
+                await new Promise(r => setTimeout(r, backoff)); 
+            } else {
+              if (isHtml) console.error(`Failed to fetch chunk ${i} after all retries (received HTML response)`);
+            }
           }
         }
       }
@@ -1196,6 +1167,9 @@ export default function Dashboard() {
     setSearchQuery(asset.name);
     setQuantity(asset.quantity.toString());
     setEntryPrice(asset.entryPrice.toString());
+    if (asset.symbol === 'GOLD-INR-GRAM') {
+      setInvestedValueInput((asset.entryPrice * asset.quantity).toFixed(2).toString());
+    }
     setManualPrice(asset.manualPrice ? asset.manualPrice.toString() : '');
     setManualSector(asset.manualSector || '');
     setEntryCurrency(asset.currency || guessCurrency(asset.symbol));
@@ -1208,6 +1182,7 @@ export default function Dashboard() {
     setSelectedResult(null);
     setQuantity('');
     setEntryPrice('');
+    setInvestedValueInput('');
     setManualPrice('');
     setManualSector('');
     setEntryCurrency('INR');
@@ -1217,12 +1192,6 @@ export default function Dashboard() {
   const saveOpenRouterKey = (key: string) => {
     setOpenRouterKey(key);
     syncToDb({ settings: { openRouterKey: key } });
-    setIsSettingsOpen(false);
-  };
-
-  const saveHuggingFaceKey = (key: string) => {
-    setHuggingFaceKey(key);
-    syncToDb({ settings: { huggingFaceKey: key } });
     setIsSettingsOpen(false);
   };
 
@@ -1328,33 +1297,6 @@ export default function Dashboard() {
     reader.readAsText(file);
     // Reset file input
     e.target.value = '';
-  };
-
-  const callHuggingFace = async (messages: any[], tools: any[]) => {
-    if (!huggingFaceKey) {
-      throw new Error('Hugging Face API key is required. Please set it in Settings.');
-    }
-
-    const res = await fetch(`https://api-inference.huggingface.co/v1/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${huggingFaceKey}`
-      },
-      body: JSON.stringify({
-        model: huggingFaceModel,
-        messages: messages,
-        tools: tools,
-        max_tokens: 1024
-      })
-    });
-
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`HF Error (${res.status}): ${text.substring(0, 200)}`);
-    }
-
-    return await res.json();
   };
 
   const callOpenRouter = async (messages: any[], tools: any[]) => {
@@ -1831,12 +1773,7 @@ export default function Dashboard() {
         Current portfolio symbols: ${assets.map(a => a.symbol).join(', ')}` 
       };
       
-      let response;
-      if (aiProvider === 'google' || aiProvider === 'openrouter') {
-        response = await callOpenRouter([systemPrompt, ...currentMessages], tools);
-      } else {
-        response = await callHuggingFace([systemPrompt, ...currentMessages], tools);
-      }
+      let response = await callOpenRouter([systemPrompt, ...currentMessages], tools);
       if (!response.choices || response.choices.length === 0) {
         throw new Error(response.error?.message || 'The AI model returned an empty response. It might be overloaded or unavailable.');
       }
@@ -2056,11 +1993,7 @@ export default function Dashboard() {
         currentMessages.push(...toolResponses);
         setChatMessages(prev => [...prev, toolCallMessage, ...toolResponses]);
         
-        if (aiProvider === 'google' || aiProvider === 'openrouter') {
-          response = await callOpenRouter([systemPrompt, ...currentMessages], tools);
-        } else {
-          response = await callHuggingFace([systemPrompt, ...currentMessages], tools);
-        }
+        response = await callOpenRouter([systemPrompt, ...currentMessages], tools);
         if (!response.choices || response.choices.length === 0) {
           throw new Error(response.error?.message || 'The AI model returned an empty response. It might be overloaded or unavailable.');
         }
@@ -2162,13 +2095,13 @@ export default function Dashboard() {
           if (pct <= 0) return;
           const normalizedPct = pct / totalAlloc;
           const val = value * normalizedPct;
-          const existing = acc.find(item => item.name === cat);
+          const existing = acc.find(item => item.name.trim() === cat.trim());
           if (existing) {
             existing.value += val;
             existing.constituents = existing.constituents || [];
             existing.constituents.push({ name: asset.name, symbol: asset.symbol, value: val });
           } else {
-            acc.push({ name: cat, value: val, constituents: [{ name: asset.name, symbol: asset.symbol, value: val }] });
+            acc.push({ name: cat.trim(), value: val, constituents: [{ name: asset.name, symbol: asset.symbol, value: val }] });
           }
         };
         
@@ -2188,15 +2121,17 @@ export default function Dashboard() {
       } else {
         finalCategory = 'Equities'; // Fallback if no allocation data and not obviously debt
       }
+    } else if (finalCategory === 'Commodities') {
+      finalCategory = 'Commodities > ' + getCommoditySubCategory(asset);
     }
 
-    const existingType = acc.find(item => item.name === finalCategory);
+    const existingType = acc.find(item => item.name.trim() === finalCategory.trim());
     if (existingType) {
       existingType.value += value;
       existingType.constituents = existingType.constituents || [];
       existingType.constituents.push({ name: asset.name, symbol: asset.symbol, value: value });
     } else {
-      acc.push({ name: finalCategory, value, constituents: [{ name: asset.name, symbol: asset.symbol, value: value }] });
+      acc.push({ name: finalCategory.trim(), value, constituents: [{ name: asset.name, symbol: asset.symbol, value: value }] });
     }
     return acc;
   }, []);
@@ -2920,19 +2855,16 @@ export default function Dashboard() {
   return (
     <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 font-sans p-4 md:p-8">
       <div className="max-w-6xl mx-auto space-y-8">
+        {runningOperations.length > 0 && (
+          <div className="fixed top-0 left-0 right-0 z-50 bg-blue-600 text-white text-center py-2 text-sm font-semibold shadow-md animate-in slide-in-from-top-2">
+            {runningOperations.join(' | ')}...
+          </div>
+        )}
         
         {/* Header */}
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
           <div>
-            <div className="flex items-center gap-3">
-              <h1 className="text-3xl font-bold tracking-tight">Asset Allocation Tracker</h1>
-              {isFirestoreOffline && (
-                <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400 text-xs font-medium border border-amber-200 dark:border-amber-800 animate-pulse">
-                  <div className="w-1.5 h-1.5 rounded-full bg-amber-500"></div>
-                  Firestore Offline
-                </div>
-              )}
-            </div>
+            <h1 className="text-3xl font-bold tracking-tight">Asset Allocation Tracker</h1>
             <p className="text-zinc-500 dark:text-zinc-400 mt-1">Track your investments in real-time</p>
           </div>
           <div className="flex gap-3">
@@ -3965,6 +3897,18 @@ export default function Dashboard() {
                                       isFetching={isLoadingPrices && !priceData} 
                                       symbol={item.symbol} 
                                     />
+                                    {(item.symbol === 'GOLD-INR-GRAM' || item.symbol === 'SILVER-INR-GRAM') && !isGroupHead && (
+                                      <button 
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          fetchPrices(true, [item.symbol]);
+                                        }}
+                                        className="ml-1 p-0.5 hover:bg-zinc-200 dark:hover:bg-zinc-700 rounded transition-colors text-zinc-400 hover:text-blue-500"
+                                        title="Refresh Price"
+                                      >
+                                        <RefreshCw className={`w-3 h-3 ${isLoadingPrices && (!priceData || isLoadingPrices) ? 'animate-spin' : ''}`} />
+                                      </button>
+                                    )}
                                   </div>
                                   <div className="text-[10px] text-zinc-500 mt-0.5">
                                     {item.symbol} &bull; {displaySector}
@@ -3974,6 +3918,7 @@ export default function Dashboard() {
                             </td>
                             <td className="px-6 py-4 text-right font-medium text-zinc-700 dark:text-zinc-300">
                               {item.quantity.toLocaleString('en-IN', { maximumFractionDigits: 6 })}
+                              {item.symbol === 'GOLD-INR-GRAM' ? ' g' : ''}
                             </td>
                             <td className="px-6 py-4 text-right">
                               <div className="text-zinc-900 dark:text-zinc-100 font-mono text-xs">
@@ -4006,7 +3951,7 @@ export default function Dashboard() {
                             </td>
                             <td className="px-6 py-4 text-center">
                               {!isGroupHead ? (
-                                <div className="flex justify-center gap-1 opacity-70 lg:opacity-0 group-hover/row:opacity-100 transition-opacity">
+                                <div className="flex justify-center gap-1 opacity-100 lg:opacity-40 group-hover/row:opacity-100 transition-opacity">
                                   {!item.id.includes('binance-') && !item.id.includes('coindcx-') ? (
                                     <>
                                       <button onClick={() => handleEditAsset(item)} className="p-1.5 text-zinc-400 hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded transition-colors" title="Edit"><Pencil className="w-3.5 h-3.5" /></button>
@@ -4489,7 +4434,7 @@ export default function Dashboard() {
               )}
 
               {selectedResult && (
-                <div className="grid grid-cols-2 gap-4">
+                <div className={`grid ${selectedResult?.symbol === 'GOLD-INR-GRAM' ? 'grid-cols-3' : 'grid-cols-2'} gap-4`}>
                   <div>
                     <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1.5">Quantity</label>
                     <input 
@@ -4498,12 +4443,42 @@ export default function Dashboard() {
                       min="0"
                       className="w-full px-4 py-2.5 border border-zinc-300 dark:border-zinc-700 rounded-xl bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 focus:ring-2 focus:ring-blue-500 outline-none transition-shadow"
                       value={quantity}
-                      onChange={(e) => setQuantity(e.target.value)}
+                      onChange={(e) => {
+                        setQuantity(e.target.value);
+                        if (selectedResult?.symbol === 'GOLD-INR-GRAM') {
+                            const val = parseFloat(e.target.value);
+                            const price = parseFloat(entryPrice);
+                            if (!isNaN(val) && !isNaN(price)) {
+                                setInvestedValueInput((val * price).toFixed(2));
+                            }
+                        }
+                      }}
                       placeholder="e.g. 10"
                     />
                   </div>
+                  {selectedResult?.symbol === 'GOLD-INR-GRAM' && (
+                    <div>
+                        <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1.5">Invested Value</label>
+                        <input                
+                          type="number"
+                          step="any"
+                          min="0"
+                          className="w-full px-4 py-2.5 border border-zinc-300 dark:border-zinc-700 rounded-xl bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 focus:ring-2 focus:ring-blue-500 outline-none transition-shadow"
+                          value={investedValueInput}
+                          onChange={(e) => {
+                             setInvestedValueInput(e.target.value);
+                             const val = parseFloat(e.target.value);
+                             const qty = parseFloat(quantity);
+                             if (!isNaN(val) && !isNaN(qty) && qty > 0) {
+                                 setEntryPrice((val / qty).toFixed(2));
+                             }
+                          }}
+                          placeholder="e.g. 1000"
+                        />
+                    </div>
+                  )}
                   <div>
-                    <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1.5">Entry Price</label>
+                    <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1.5">{selectedResult?.symbol === 'GOLD-INR-GRAM' ? 'Avg Buy Price' : 'Entry Price'}</label>
                     <div className="relative">
                       <input 
                         type="number" 
@@ -4511,7 +4486,16 @@ export default function Dashboard() {
                         min="0"
                         className="w-full pl-4 pr-20 py-2.5 border border-zinc-300 dark:border-zinc-700 rounded-xl bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 focus:ring-2 focus:ring-blue-500 outline-none transition-shadow"
                         value={entryPrice}
-                        onChange={(e) => setEntryPrice(e.target.value)}
+                        onChange={(e) => {
+                          setEntryPrice(e.target.value);
+                          if (selectedResult?.symbol === 'GOLD-INR-GRAM') {
+                             const price = parseFloat(e.target.value);
+                             const qty = parseFloat(quantity);
+                             if (!isNaN(price) && !isNaN(qty)) {
+                                 setInvestedValueInput((price * qty).toFixed(2));
+                             }
+                          }
+                        }}
                         placeholder="e.g. 1500.50"
                       />
                       <div className="absolute right-1.5 top-1.5 bottom-1.5 flex bg-zinc-100 dark:bg-zinc-800 rounded-lg p-0.5">
@@ -4643,7 +4627,7 @@ export default function Dashboard() {
                 <select
                   value={aiProvider}
                   onChange={(e) => {
-                    const val = e.target.value as 'openrouter' | 'google' | 'huggingface';
+                    const val = e.target.value as 'openrouter' | 'google';
                     setAiProvider(val);
                     syncToDb({ settings: { aiProvider: val } });
                   }}
@@ -4651,7 +4635,6 @@ export default function Dashboard() {
                 >
                   <option value="openrouter">OpenRouter</option>
                   <option value="google">Google Gemini (Built-in)</option>
-                  <option value="huggingface">Hugging Face (Gemma 4/2)</option>
                 </select>
               </div>
 
@@ -4714,63 +4697,6 @@ export default function Dashboard() {
                     <p className="text-xs text-zinc-500 mt-2">
                       Select a free model from the list or choose &quot;Custom Model...&quot; to type any OpenRouter model ID.
                     </p>
-                  </div>
-                </>
-              )}
-
-              {aiProvider === 'huggingface' && (
-                <>
-                  <div>
-                    <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1.5">Hugging Face API Token</label>
-                    <input 
-                      type="password" 
-                      className="w-full px-4 py-2.5 border border-zinc-300 dark:border-zinc-700 rounded-xl bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 focus:ring-2 focus:ring-blue-500 outline-none transition-shadow"
-                      placeholder="hf_..."
-                      defaultValue={huggingFaceKey}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') saveHuggingFaceKey(e.currentTarget.value);
-                      }}
-                      onBlur={(e) => saveHuggingFaceKey(e.target.value)}
-                    />
-                    <p className="text-xs text-zinc-500 mt-2">
-                      Required for HF Inference API. Get one at <a href="https://huggingface.co/settings/tokens" target="_blank" rel="noreferrer" className="text-blue-500 hover:underline">huggingface.co</a>.
-                    </p>
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1.5">HF Model ID</label>
-                    <select
-                      value={['google/gemma-2-27b-it', 'google/gemma-2-9b-it', 'google/gemma-2-2b-it', 'google/gemma-7b-it'].includes(huggingFaceModel) ? huggingFaceModel : 'custom'}
-                      onChange={(e) => {
-                        if (e.target.value === 'custom') {
-                          setHuggingFaceModel('');
-                          syncToDb({ settings: { huggingFaceModel: '' } });
-                        } else {
-                          setHuggingFaceModel(e.target.value);
-                          syncToDb({ settings: { huggingFaceModel: e.target.value } });
-                        }
-                      }}
-                      className="w-full px-4 py-2.5 border border-zinc-300 dark:border-zinc-700 rounded-xl bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 focus:ring-2 focus:ring-blue-500 outline-none transition-shadow appearance-none"
-                    >
-                      <option value="google/gemma-2-27b-it">Gemma 2 27B IT</option>
-                      <option value="google/gemma-2-9b-it">Gemma 2 9B IT</option>
-                      <option value="google/gemma-2-2b-it">Gemma 2 2B IT</option>
-                      <option value="google/gemma-7b-it">Gemma 1 7B IT (Legacy)</option>
-                      <option value="custom">Custom HF Model ID...</option>
-                    </select>
-                    {!['google/gemma-2-27b-it', 'google/gemma-2-9b-it', 'google/gemma-2-2b-it', 'google/gemma-7b-it'].includes(huggingFaceModel) && (
-                       <input
-                       type="text"
-                       placeholder="e.g., google/gemma-2-27b-it"
-                       value={huggingFaceModel}
-                       onChange={(e) => {
-                         setHuggingFaceModel(e.target.value);
-                         syncToDb({ settings: { huggingFaceModel: e.target.value } });
-                       }}
-                       className="w-full mt-2 px-4 py-2.5 border border-zinc-300 dark:border-zinc-700 rounded-xl bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 focus:ring-2 focus:ring-blue-500 outline-none transition-shadow"
-                       autoFocus
-                     />
-                    )}
                   </div>
                 </>
               )}
@@ -4854,6 +4780,13 @@ export default function Dashboard() {
         </div>
       )}
 
+      {/* Running Operation Indicator */}
+      {isLoadingPrices && (
+        <div className="fixed top-4 right-4 z-50 bg-blue-500 text-white px-4 py-2 rounded-full shadow-lg text-sm font-medium animate-pulse">
+          Analyzing...
+        </div>
+      )}
+
       {/* Allocation Settings Modal */}
       {isAllocationSettingsOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
@@ -4873,12 +4806,14 @@ export default function Dashboard() {
                   Set your target percentage for each asset category. This helps track where your portfolio needs rebalancing.
                 </p>
                 <div className="space-y-3">
-                  {Object.entries(idealAllocation).map(([category, percentage]) => (
-                    <div key={category} className="flex items-center gap-3">
-                      <label className="w-1/3 text-sm text-zinc-600 dark:text-zinc-400">{category}</label>
+                  {allCategories.map((category) => (
+                    <div key={category} className={`flex items-center gap-3 ${category.startsWith('Commodities >') ? 'pl-6' : ''}`}>
+                      <label className="w-1/3 text-sm text-zinc-600 dark:text-zinc-400">
+                        {category.startsWith('Commodities >') ? category.split('>')[1].trim() : category}
+                      </label>
                       <input
                         type="number"
-                        value={percentage}
+                        value={idealAllocation[category] || 0}
                         onChange={(e) => {
                           const newAlloc = { ...idealAllocation, [category]: Number(e.target.value) };
                           setIdealAllocation(newAlloc);

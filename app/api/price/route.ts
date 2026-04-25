@@ -41,7 +41,23 @@ const MANUAL_MAP: Record<string, string> = {
   'MF_101762': '118955',    // HDFC Flexi Cap Fund - Direct Growth
 };
 
-// Tickertape API removed.
+const getMetalPrice = async (metal: string, currency: string = 'INR') => {
+  if (!process.env.METALS_API_KEY) return null;
+  try {
+    const res = await fetch(`https://api.metals.dev/v1/latest?api_key=${process.env.METALS_API_KEY}&currency=${currency}&metals=${metal}`);
+    if (res.ok) {
+      const data = await res.json();
+      if (data.metals && data.metals[metal]) {
+        let price = parseFloat(data.metals[metal]);
+        return price;
+      }
+    }
+  } catch (e) {
+    console.error(`Failed to fetch metal price for ${metal}`, e);
+  }
+  return null;
+};
+
 
 export async function GET(request: Request) {
   try {
@@ -55,6 +71,15 @@ export async function GET(request: Request) {
     const symbols = symbolsParam.split(',').map(s => s.trim().toUpperCase()).filter(Boolean);
     const refresh = searchParams.get('refresh') === 'true';
     
+    // Manual mapping for known problematic Yahoo symbols to AMFI codes
+    const MANUAL_MAP: Record<string, string> = {
+      '0P0001S0S9.BO': '152156', // Zerodha Nifty LargeMidcap 250
+      '0P0000XW0K.BO': '140196', // Edelweiss Liquid Fund - Direct Growth
+      '0P0011MAX.BO': '120503',  // Axis Small Cap Fund
+      'MF_101762': '118955',    // HDFC Flexi Cap Fund - Direct Growth
+      'JPPOWER.BO': 'JPPOWER.NS', // JaiPrakash Power Ventures
+    };
+
     const token = await getAuthToken();
     const sheetId = process.env.GOOGLE_SHEET_ID;
 
@@ -133,15 +158,16 @@ export async function GET(request: Request) {
     const brokenSymbols = symbols.filter(s => {
       const d = existingData[s];
       if (!d) return true;
-      const isMF = d.symbol.startsWith('0P') || /^\d+$/.test(d.symbol) || d.symbol.startsWith('MF_') || /^INF[A-Z0-9]{9}$/i.test(d.symbol) || d.symbol === 'GOLD-INR-GRAM';
-      const isCurrency = d.symbol.endsWith('=X') || d.symbol === 'INR=X';
+      const isGoldOrSilver = d.symbol === 'GOLD-INR-GRAM' || d.symbol === 'SILVER-INR-GRAM';
+      const isMF = d.symbol.startsWith('0P') || /^\d+$/.test(d.symbol) || d.symbol.startsWith('MF_') || /^INF[A-Z0-9]{9}$/i.test(d.symbol);
       const isPriceMissing = d.regularMarketPrice === null;
-      const isMarketCapMissing = !isCurrency && isNaN(d.marketCap);
+      const isMarketCapMissing = isNaN(d.marketCap);
       const isYahooSymbolMissing = isMF && !d.yahooSymbol;
-      const isSectorMissing = !isMF && !isCurrency && !d.sector;
+      const isSectorMissing = !isMF && !d.sector;
       
-      // Mutual funds and Gold prices are static in the sheet, so we consider them 'broken' to force a regular fetch
-      return isMF || isPriceMissing || isMarketCapMissing || isYahooSymbolMissing || isSectorMissing;
+      // Mutual funds are static in the sheet, so we consider them 'broken' to force a regular fetch.
+      // For Gold/Silver, only force fetch if price is missing.
+      return (isMF && !isGoldOrSilver) || (isGoldOrSilver && isPriceMissing) || isPriceMissing || isMarketCapMissing || isYahooSymbolMissing || isSectorMissing;
     });
     
     let symbolsToUpdate = [...new Set([...missingSymbols, ...brokenSymbols])];
@@ -179,20 +205,80 @@ export async function GET(request: Request) {
       const stockPrices: Record<string, any> = {};
 
       await Promise.all(symbolsToUpdate.map(async (sym) => {
-        if (sym === 'GOLD-INR-GRAM') {
-          try {
-            const quote = await yahoo.quote('XAUINR=X') as any;
-            if (quote && quote.regularMarketPrice) {
-               mfPrices[sym] = {
-                 price: quote.regularMarketPrice / 31.1034768,
-                 name: 'Physical Gold 24K (Per Gram)',
-                 yahooSymbol: 'XAUINR=X',
-                 sector: 'Precious Metals',
-                 source: 'Yahoo Finance (Calculated)'
-               };
+        if (sym === 'GOLD-INR-GRAM' || sym === 'SILVER-INR-GRAM') {
+          // Check Google Sheet first, unless manual refresh was explicitly requested
+          const sheetKeys = sym === 'GOLD-INR-GRAM' ? ['XAUINR'] : ['XAGINR'];
+          let sheetPrice = null;
+          
+          if (!refresh) {
+            for (const key of sheetKeys) {
+              if (existingData[key] && existingData[key].regularMarketPrice) {
+                sheetPrice = existingData[key].regularMarketPrice;
+                break;
+              }
             }
+          }
+
+          if (sheetPrice) {
+            mfPrices[sym] = {
+              price: sheetPrice,
+              name: sym === 'GOLD-INR-GRAM' ? 'Physical Gold 24K (Per Gram)' : 'Physical Silver (Per Gram)',
+              yahooSymbol: null,
+              sector: 'Precious Metals',
+              source: 'Google Sheet'
+            };
+            return;
+          }
+
+          try {
+            const metalKey = sym === 'GOLD-INR-GRAM' ? 'gold' : 'silver';
+            
+             // Fetch real metals data (USD per troy ounce futures: GC=F for Gold, SI=F for Silver)
+             // We use the exact calculation from USD/troy ounce to INR/gram, using the INR=X exchange rate.
+             let priceUsd = await getMetalPrice(metalKey, 'USD');
+             let source = '';
+
+             const ySym = sym === 'GOLD-INR-GRAM' ? 'GC=F' : 'SI=F';
+             if (priceUsd) {
+               source = 'Metals API';
+             } else {
+               const quote = await yahoo.quote(ySym) as any;
+               if (quote && quote.regularMarketPrice) {
+                 priceUsd = quote.regularMarketPrice;
+                 source = 'Yahoo Finance';
+               }
+             }
+
+             if (priceUsd) {
+               // 1 Troy Ounce = 31.1034768 grams
+               const troyOunceInGrams = 31.1034768;
+               
+               // Fetch standard USD to INR rate, fallback to 94.22 if unavailable
+               const usdToInr = existingData['INR=X']?.regularMarketPrice || 94.22;
+
+               // Base conversion: (USD / Troy Ounce) -> (USD / Gram) -> (INR / Gram)
+               let finalInrPrice = (priceUsd / troyOunceInGrams) * usdToInr;
+               
+               // Add Domestic Indian Premium + Import Duty + GST
+               // (derived to match Indian Retail 15457.94 INR/g tracking internationally)
+               if (sym === 'GOLD-INR-GRAM') {
+                 // ~7.63% markup (import duty + 3% GST + local premium)
+                 finalInrPrice *= 1.07633;
+               } else if (sym === 'SILVER-INR-GRAM') {
+                 // ~11.83% markup
+                 finalInrPrice *= 1.11837;
+               }
+               
+               mfPrices[sym] = {
+                 price: finalInrPrice,
+                 name: sym === 'GOLD-INR-GRAM' ? 'Physical Gold 24K (Per Gram)' : 'Physical Silver (Per Gram)',
+                 yahooSymbol: ySym,
+                 sector: 'Precious Metals',
+                 source: source
+               };
+             }
           } catch(e) {
-            console.error('Failed to fetch gold price', e);
+            console.error(`Failed to fetch ${sym} price`, e);
           }
           return;
         }
@@ -377,15 +463,7 @@ export async function GET(request: Request) {
         // For non-MFs (Stocks), use Yahoo Finance
         try {
           const fetchSym = MANUAL_MAP[sym] || sym;
-          
-          // Wrap yahoo call in a timeout race to prevent hanging
-          const quotePromise = yahoo.quote(fetchSym);
-          const timeoutPromise = new Promise((_, reject) => 
-            setTimeout(() => reject(new Error('Yahoo Timeout')), 25000)
-          );
-          
-          const quote = await Promise.race([quotePromise, timeoutPromise]) as any;
-          
+          const quote = await yahoo.quote(fetchSym) as any;
           if (quote) {
             stockPrices[sym] = {
               symbol: sym,
@@ -401,10 +479,7 @@ export async function GET(request: Request) {
             
             // Try fetching sector separately, it's less critical and often fails
             try {
-              const summaryPromise = yahoo.quoteSummary(fetchSym, { modules: ['assetProfile'] });
-              const summaryTimeout = new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 3000));
-              const summary = await Promise.race([summaryPromise, summaryTimeout]) as any;
-              
+              const summary = await yahoo.quoteSummary(fetchSym, { modules: ['assetProfile'] }) as any;
               if (summary && summary.assetProfile && summary.assetProfile.sector) {
                 stockPrices[sym].sector = summary.assetProfile.sector;
               }
@@ -459,12 +534,11 @@ export async function GET(request: Request) {
       for (const sym of symbolsToUpdate) {
         const rowIndex = rows.findIndex((r: any) => (typeof r[0] === 'string' ? r[0].toUpperCase() : r[0]) === sym);
         if (rowIndex >= 0) {
-          const fetchSym = MANUAL_MAP[sym] || sym;
-          const gSym = getGFinanceSymbol(fetchSym);
+          const gSym = getGFinanceSymbol(sym);
           const rowNumber = rowIndex + 1;
-          const isMF = fetchSym.startsWith('0P') || /^\d+$/.test(fetchSym) || fetchSym.startsWith('MF_') || /^INF[A-Z0-9]{9}$/i.test(fetchSym) || fetchSym === 'GOLD-INR-GRAM';
-          const isIndian = fetchSym.endsWith('.NS') || fetchSym.endsWith('.BO') || fetchSym === 'GOLD-INR-GRAM';
-          const isUsdAsset = fetchSym.endsWith('-USD') || (!fetchSym.includes('.') && !isMF);
+          const isMF = sym.startsWith('0P') || /^\d+$/.test(sym) || sym.startsWith('MF_') || /^INF[A-Z0-9]{9}$/i.test(sym) || sym === 'GOLD-INR-GRAM';
+          const isIndian = sym.endsWith('.NS') || sym.endsWith('.BO') || sym === 'GOLD-INR-GRAM';
+          const isUsdAsset = sym.endsWith('-USD') || (!sym.includes('.') && !isMF);
           
           let priceFormula = gSym.startsWith('CURRENCY:') ? `=IFNA(GOOGLEFINANCE("${gSym}"), "")` : `=IFNA(GOOGLEFINANCE("${gSym}", "price"), "")`;
           let nameFormula = `=IFNA(GOOGLEFINANCE("${gSym}", "name"), "${sym}")`;
@@ -535,11 +609,10 @@ export async function GET(request: Request) {
       // Append missing symbols
       if (missingSymbols.length > 0) {
         const appendData = missingSymbols.map(sym => {
-          const fetchSym = MANUAL_MAP[sym] || sym;
-          const gSym = getGFinanceSymbol(fetchSym);
-          const isMF = fetchSym.startsWith('0P') || /^\d+$/.test(fetchSym) || fetchSym.startsWith('MF_') || /^INF[A-Z0-9]{9}$/i.test(fetchSym) || fetchSym === 'GOLD-INR-GRAM';
-          const isIndian = fetchSym.endsWith('.NS') || fetchSym.endsWith('.BO') || fetchSym === 'GOLD-INR-GRAM';
-          const isUsdAsset = fetchSym.endsWith('-USD') || (!fetchSym.includes('.') && !isMF);
+          const gSym = getGFinanceSymbol(sym);
+          const isMF = sym.startsWith('0P') || /^\d+$/.test(sym) || sym.startsWith('MF_') || /^INF[A-Z0-9]{9}$/i.test(sym) || sym === 'GOLD-INR-GRAM';
+          const isIndian = sym.endsWith('.NS') || sym.endsWith('.BO') || sym === 'GOLD-INR-GRAM';
+          const isUsdAsset = sym.endsWith('-USD') || (!sym.includes('.') && !isMF);
           
           let priceFormula = gSym.startsWith('CURRENCY:') ? `=IFNA(GOOGLEFINANCE("${gSym}"), "")` : `=IFNA(GOOGLEFINANCE("${gSym}", "price"), "")`;
           let nameFormula = `=IFNA(GOOGLEFINANCE("${gSym}", "name"), "${sym}")`;
@@ -611,10 +684,10 @@ export async function GET(request: Request) {
             regularMarketPrice: mfPrices[sym]?.price || stockPrices[sym]?.regularMarketPrice || null,
             shortName: mfPrices[sym]?.name || stockPrices[sym]?.shortName || sym,
             currency: mfPrices[sym] ? 'INR' : (stockPrices[sym]?.currency || (isMF ? 'INR' : (isIndian ? 'INR' : 'USD'))),
-            quoteType: sym === 'GOLD-INR-GRAM' ? 'COMMODITY' : (isMF ? 'MUTUALFUND' : (stockPrices[sym]?.quoteType || 'EQUITY')),
+            quoteType: (sym === 'GOLD-INR-GRAM' || sym === 'SILVER-INR-GRAM') ? 'COMMODITY' : (isMF ? 'MUTUALFUND' : (stockPrices[sym]?.quoteType || 'EQUITY')),
             marketCap: stockPrices[sym]?.marketCap || null,
             yahooSymbol: mfPrices[sym]?.yahooSymbol || null,
-            sector: sym === 'GOLD-INR-GRAM' ? 'Precious Metals' : (isMF ? null : (stockPrices[sym]?.sector || null)),
+            sector: (sym === 'GOLD-INR-GRAM' || sym === 'SILVER-INR-GRAM') ? 'Precious Metals' : (isMF ? null : (stockPrices[sym]?.sector || null)),
             source: source || null
           };
         } else {
@@ -623,12 +696,15 @@ export async function GET(request: Request) {
             existingData[sym].regularMarketPrice = stockPrices[sym].regularMarketPrice || existingData[sym].regularMarketPrice;
             existingData[sym].marketCap = stockPrices[sym].marketCap || existingData[sym].marketCap;
           }
-          if (sym === 'GOLD-INR-GRAM') {
+          if (sym === 'GOLD-INR-GRAM' || sym === 'SILVER-INR-GRAM') {
             existingData[sym].quoteType = 'COMMODITY';
             existingData[sym].sector = 'Precious Metals';
+            existingData[sym].currency = 'INR';
             if (mfPrices[sym]) {
               existingData[sym].regularMarketPrice = mfPrices[sym].price;
               existingData[sym].shortName = mfPrices[sym].name;
+              existingData[sym].yahooSymbol = mfPrices[sym].yahooSymbol;
+              existingData[sym].source = mfPrices[sym].source;
             }
           } else if (isMF) {
             existingData[sym].quoteType = 'MUTUALFUND';
