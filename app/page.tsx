@@ -576,6 +576,30 @@ export default function Dashboard() {
               delete loadedAllocation['Debt'];
               needsSync = true;
             }
+            if (loadedAllocation['Domestic Equity'] !== undefined) {
+              const val = loadedAllocation['Domestic Equity'];
+              delete loadedAllocation['Domestic Equity'];
+              loadedAllocation['Equities > Domestic Equity'] = val;
+              needsSync = true;
+            }
+            if (loadedAllocation['Global Equity'] !== undefined) {
+              const val = loadedAllocation['Global Equity'];
+              delete loadedAllocation['Global Equity'];
+              loadedAllocation['Equities > Global Equity'] = val;
+              needsSync = true;
+            }
+            if (loadedAllocation['Gold'] !== undefined) {
+              const val = loadedAllocation['Gold'];
+              delete loadedAllocation['Gold'];
+              loadedAllocation['Commodities > Gold'] = val;
+              needsSync = true;
+            }
+            if (loadedAllocation['Silver'] !== undefined) {
+              const val = loadedAllocation['Silver'];
+              delete loadedAllocation['Silver'];
+              loadedAllocation['Commodities > Silver'] = val;
+              needsSync = true;
+            }
 
             if (needsSync) {
               syncToDb({ settings: { idealAllocation: loadedAllocation } });
@@ -2151,52 +2175,115 @@ export default function Dashboard() {
 
   const totalCurrentValue = allocationData.reduce((sum, item) => sum + item.value, 0);
   
+  // Helper for consistent grouping
+  const normalizeGroup = (cat: string) => {
+    const trimmed = cat.trim();
+    const parts = trimmed.split(' > ');
+    const lastPart = parts[parts.length - 1].trim();
+    if (['Gold', 'Silver'].includes(lastPart)) return `Commodities > ${lastPart}`;
+    if (['Domestic Equity', 'Global Equity'].includes(lastPart)) return `Equities > ${lastPart}`;
+    return trimmed;
+  };
+
+  const consolidatedAllocation = Object.entries(idealAllocation).reduce((acc, [key, val]) => {
+    const normalized = normalizeGroup(key);
+    acc[normalized] = (acc[normalized] || 0) + val;
+    return acc;
+  }, {} as Record<string, number>);
+
   const allCategories = Array.from(new Set([
-    ...Object.keys(idealAllocation),
-    ...allocationData.map(item => item.name)
+    ...Object.keys(consolidatedAllocation),
+    ...allocationData.map(item => normalizeGroup(item.name))
   ]));
 
-  const allocationAnalysisTemp = allCategories.map(category => {
-    const currentItem = allocationData.find(item => item.name === category);
-    const currentValue = currentItem ? currentItem.value : 0;
-    const currentPercentage = totalCurrentValue > 0 ? (currentValue / totalCurrentValue) * 100 : 0;
-    const idealPercentage = idealAllocation[category] || 0;
-    const diffPercentage = currentPercentage - idealPercentage;
-    const diffValue = (diffPercentage / 100) * totalCurrentValue;
-    const constituents = currentItem && currentItem.constituents ? currentItem.constituents.sort((a: any, b: any) => b.value - a.value) : [];
+  // Pre-calculate the effective ideal percentages (supporting relative sub-category percentages)
+  const effectiveIdeal: Record<string, number> = {};
+  allCategories.forEach(categoryStr => {
+    const [parentName, subName] = categoryStr.includes(' > ') ? categoryStr.split(' > ') : [categoryStr, null];
     
-    return {
-      category,
-      currentValue,
-      currentPercentage,
-      idealPercentage,
-      diffPercentage,
-      diffValue,
-      constituents
-    };
+    if (subName) {
+      const parentRawIdeal = consolidatedAllocation[parentName] || 0;
+      const rawCurrentIdeal = consolidatedAllocation[categoryStr] || 0;
+      if (parentRawIdeal > 0) {
+        effectiveIdeal[categoryStr] = (rawCurrentIdeal / 100) * parentRawIdeal;
+      } else {
+        effectiveIdeal[categoryStr] = rawCurrentIdeal;
+      }
+    } else {
+      effectiveIdeal[categoryStr] = consolidatedAllocation[categoryStr] || 0;
+    }
+  });
+
+  // Group categories to handle sub-categories (e.g., 'Commodities > Gold')
+  const groupedAnalysis: Record<string, any> = {};
+  
+  allCategories.forEach(categoryStr => {
+    const [parentName, subName] = categoryStr.includes(' > ') ? categoryStr.split(' > ') : [categoryStr, null];
+    
+    if (!groupedAnalysis[parentName]) {
+      groupedAnalysis[parentName] = {
+        category: parentName,
+        currentValue: 0,
+        currentPercentage: 0,
+        idealPercentage: consolidatedAllocation[parentName] || 0,
+        diffPercentage: 0,
+        diffValue: 0,
+        constituents: [],
+        subCategories: [],
+        isParent: true,
+      };
+    }
+    
+    const matchingItems = allocationData.filter(item => normalizeGroup(item.name) === categoryStr);
+    const currentValue = matchingItems.reduce((sum, item) => sum + item.value, 0);
+    const currentConstituents = matchingItems.flatMap(item => item.constituents || []);
+    
+    const currentPercentage = totalCurrentValue > 0 ? (currentValue / totalCurrentValue) * 100 : 0;
+    const idealPercentage = effectiveIdeal[categoryStr] || 0;
+    
+    if (subName) {
+      // It's a sub-category
+      groupedAnalysis[parentName].subCategories.push({
+        category: subName,
+        currentValue,
+        currentPercentage,
+        idealPercentage,
+        diffPercentage: currentPercentage - idealPercentage,
+        diffValue: ((currentPercentage - idealPercentage) / 100) * totalCurrentValue,
+        constituents: currentConstituents
+      });
+      // Add to parent totals
+      groupedAnalysis[parentName].currentValue += currentValue;
+      groupedAnalysis[parentName].currentPercentage += currentPercentage;
+      
+      // If parent didn't have an explicit ideal percentage, accumulate from children
+      if (!(consolidatedAllocation[parentName] > 0)) {
+        groupedAnalysis[parentName].idealPercentage += idealPercentage;
+      }
+    } else {
+      // It's a parent category (or a standalone category without >)
+      groupedAnalysis[parentName].currentValue += currentValue;
+      groupedAnalysis[parentName].currentPercentage += currentPercentage;
+      
+      if (currentConstituents.length > 0) {
+        groupedAnalysis[parentName].constituents.push(...currentConstituents);
+      }
+    }
+  });
+
+  // Convert map to sorted array
+  const allocationAnalysisTemp = Object.values(groupedAnalysis).map(item => {
+    item.diffPercentage = item.currentPercentage - item.idealPercentage;
+    item.diffValue = (item.diffPercentage / 100) * totalCurrentValue;
+    return item;
   }).sort((a, b) => b.currentValue - a.currentValue);
+
 
   const domesticEquity = allocationAnalysisTemp.find(a => a.category === 'Domestic Equity');
   const globalEquity = allocationAnalysisTemp.find(a => a.category === 'Global Equity');
   
-  const allocationAnalysis = allocationAnalysisTemp.filter(a => a.category !== 'Domestic Equity' && a.category !== 'Global Equity' && a.category !== 'Equities');
+  const allocationAnalysis = allocationAnalysisTemp;
 
-  if (domesticEquity || globalEquity) {
-    const equityItem = {
-      category: 'Equities',
-      currentValue: (domesticEquity?.currentValue || 0) + (globalEquity?.currentValue || 0),
-      currentPercentage: (domesticEquity?.currentPercentage || 0) + (globalEquity?.currentPercentage || 0),
-      idealPercentage: (idealAllocation['Equities'] || 0), // Use total ideal
-      diffPercentage: 0, // Calculated later
-      diffValue: 0, // Calculated later
-      isParent: true,
-      subCategories: [domesticEquity, globalEquity].filter(Boolean) as any[]
-    };
-    equityItem.diffPercentage = equityItem.currentPercentage - equityItem.idealPercentage;
-    equityItem.diffValue = (equityItem.diffPercentage / 100) * totalCurrentValue;
-    
-    allocationAnalysis.unshift(equityItem);
-  }
 
   const underlyingExposure: Record<string, { 
     symbol: string, 
@@ -3741,18 +3828,18 @@ export default function Dashboard() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
-                  {allocationAnalysis.map((item) => (
-                    <Fragment key={item.category}>
+                  {allocationAnalysis.map((item, index) => (
+                    <Fragment key={`category-${item.category}-${index}`}>
                       <tr 
-                        className={`hover:bg-zinc-50 dark:hover:bg-zinc-900/50 transition-colors ${item.constituents && item.constituents.length > 0 ? 'cursor-pointer' : ''}`}
+                        className={`hover:bg-zinc-50 dark:hover:bg-zinc-900/50 transition-colors ${(item.constituents && item.constituents.length > 0) || (item.subCategories && item.subCategories.length > 0) ? 'cursor-pointer' : ''}`}
                         onClick={() => {
-                          if (item.constituents && item.constituents.length > 0) {
+                          if ((item.constituents && item.constituents.length > 0) || (item.subCategories && item.subCategories.length > 0)) {
                             setExpandedCategories(prev => ({ ...prev, [item.category]: !prev[item.category] }));
                           }
                         }}
                       >
                         <td className="px-6 py-4 font-medium flex items-center gap-2">
-                          {item.constituents && item.constituents.length > 0 && (
+                          {((item.constituents && item.constituents.length > 0) || (item.subCategories && item.subCategories.length > 0)) && (
                             expandedCategories[item.category] ? <ChevronDown className="w-4 h-4 text-zinc-400" /> : <ChevronRight className="w-4 h-4 text-zinc-400" />
                           )}
                           {item.category}
@@ -3782,6 +3869,61 @@ export default function Dashboard() {
                           )}
                         </td>
                       </tr>
+                      {expandedCategories[item.category] && item.subCategories && item.subCategories.length > 0 && (
+                        item.subCategories.map((sub: any, subIndex: number) => (
+                          <Fragment key={`${item.category}-${sub.category}-${subIndex}`}>
+                            <tr 
+                              className={`bg-zinc-50/30 dark:bg-zinc-900/10 hover:bg-zinc-50 dark:hover:bg-zinc-900/50 transition-colors ${sub.constituents && sub.constituents.length > 0 ? 'cursor-pointer' : ''}`}
+                              onClick={() => {
+                                if (sub.constituents && sub.constituents.length > 0) {
+                                  setExpandedCategories(prev => ({ ...prev, [sub.category]: !prev[sub.category] }));
+                                }
+                              }}
+                            >
+                              <td className="px-6 py-4 font-medium flex items-center gap-2 pl-12 text-zinc-600 dark:text-zinc-400">
+                                {sub.constituents && sub.constituents.length > 0 && (
+                                  expandedCategories[sub.category] ? <ChevronDown className="w-4 h-4 text-zinc-400" /> : <ChevronRight className="w-4 h-4 text-zinc-400" />
+                                )}
+                                {sub.category}
+                              </td>
+                              <td className="px-6 py-4 text-right text-zinc-600 dark:text-zinc-400">₹{sub.currentValue.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</td>
+                              <td className="px-6 py-4 text-right text-zinc-600 dark:text-zinc-400">{sub.currentPercentage.toFixed(1)}%</td>
+                              <td className="px-6 py-4 text-right text-zinc-600 dark:text-zinc-400">{sub.idealPercentage}%</td>
+                              <td className={`px-6 py-4 text-right font-medium ${sub.diffPercentage > 1 ? 'text-red-500' : sub.diffPercentage < -1 ? 'text-blue-500' : 'text-emerald-500'}`}>
+                                {sub.diffPercentage > 0 ? '+' : ''}{sub.diffPercentage.toFixed(1)}%
+                              </td>
+                              <td className="px-6 py-4 text-right">
+                                {sub.diffPercentage > 2 ? (
+                                  <span className="text-red-500 font-medium">Reduce by ₹{Math.abs(sub.diffValue).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span>
+                                ) : sub.diffPercentage < -2 ? (
+                                  <span className="text-blue-500 font-medium">Invest ₹{Math.abs(sub.diffValue).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span>
+                                ) : (
+                                  <span className="text-emerald-500 font-medium">On Track</span>
+                                )}
+                              </td>
+                            </tr>
+                            {expandedCategories[sub.category] && sub.constituents && sub.constituents.length > 0 && (
+                              <tr className="bg-zinc-50/50 dark:bg-zinc-900/20">
+                                <td colSpan={6} className="px-6 py-4">
+                                  <div className="pl-16 border-l-2 border-zinc-200 dark:border-zinc-700 space-y-2">
+                                    {sub.constituents.map((constituent: any, cIdx: number) => (
+                                      <div key={`${constituent.symbol || constituent.name}-${cIdx}`} className="flex justify-between text-sm">
+                                        <span className="text-zinc-600 dark:text-zinc-400">{constituent.name} <span className="text-xs opacity-50">({constituent.symbol})</span></span>
+                                        <span className="font-medium text-zinc-700 dark:text-zinc-300">
+                                          ₹{constituent.value.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                                          <span className="text-xs text-zinc-500 ml-2 inline-block w-12 text-right">
+                                            {((constituent.value / sub.currentValue) * 100).toFixed(1)}%
+                                          </span>
+                                        </span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </td>
+                              </tr>
+                            )}
+                          </Fragment>
+                        ))
+                      )}
                       {expandedCategories[item.category] && item.constituents && item.constituents.length > 0 && (
                         <tr className="bg-zinc-50/50 dark:bg-zinc-900/20">
                           <td colSpan={6} className="px-6 py-4">
@@ -4841,34 +4983,89 @@ export default function Dashboard() {
                   Set your target percentage for each asset category. This helps track where your portfolio needs rebalancing.
                 </p>
                 <div className="space-y-3">
-                  {allCategories.map((category) => (
-                    <div key={category} className={`flex items-center gap-3 ${category.startsWith('Commodities >') ? 'pl-6' : ''}`}>
-                      <label className="w-1/3 text-sm text-zinc-600 dark:text-zinc-400">
-                        {category.startsWith('Commodities >') ? category.split('>')[1].trim() : category}
-                      </label>
-                      <input
-                        type="number"
-                        value={idealAllocation[category] || 0}
-                        onChange={(e) => {
-                          const newAlloc = { ...idealAllocation, [category]: Number(e.target.value) };
-                          setIdealAllocation(newAlloc);
-                          syncToDb({ settings: { idealAllocation: newAlloc } });
-                        }}
-                        className="w-2/3 px-3 py-2 border border-zinc-300 dark:border-zinc-700 rounded-lg bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 focus:ring-2 focus:ring-blue-500 outline-none transition-shadow"
-                      />
-                      <button
-                        onClick={() => {
-                          const newAlloc = { ...idealAllocation };
-                          delete newAlloc[category];
-                          setIdealAllocation(newAlloc);
-                          syncToDb({ settings: { idealAllocation: newAlloc } });
-                        }}
-                        className="text-red-500 hover:text-red-600"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
-                  ))}
+                  {(() => {
+                    const grouped = allCategories.reduce((acc, cat) => {
+                      const normalized = normalizeGroup(cat);
+                      const [parent, child] = normalized.includes(' > ') ? normalized.split(' > ') : [normalized, null];
+                      
+                      if (!acc[parent]) acc[parent] = [];
+                      
+                      if (child) {
+                        acc[parent].push({ full: cat, name: child, isSub: true });
+                      } else {
+                        if (!acc[parent].some(i => !i.isSub)) {
+                          acc[parent].unshift({ full: cat, name: parent, isSub: false });
+                        }
+                      }
+                      return acc;
+                    }, {} as Record<string, {full: string, name: string, isSub: boolean}[]>);
+
+                    return Object.entries(grouped).sort(([a], [b]) => a.localeCompare(b)).map(([parent, children]) => (
+                      <Fragment key={parent}>
+                        {children.map((catObj) => (
+                           <div key={catObj.full} className={`flex items-center gap-3 ${catObj.isSub ? 'pl-6' : ''}`}>
+                             <label className={`w-1/3 text-sm text-zinc-600 dark:text-zinc-400 ${catObj.isSub ? 'text-xs' : ''}`}>
+                               {catObj.name}
+                             </label>
+                             <input
+                               type="number"
+                               value={consolidatedAllocation[catObj.full] || 0}
+                               onChange={(e) => {
+                                 const newAlloc = { ...idealAllocation };
+                                 Object.keys(newAlloc).forEach(k => {
+                                   if (normalizeGroup(k) === catObj.full) delete newAlloc[k];
+                                 });
+                                 newAlloc[catObj.full] = Number(e.target.value);
+                                 setIdealAllocation(newAlloc);
+                                 syncToDb({ settings: { idealAllocation: newAlloc } });
+                               }}
+                               className="w-1/3 px-3 py-2 border border-zinc-300 dark:border-zinc-700 rounded-lg bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 focus:ring-2 focus:ring-blue-500 outline-none transition-shadow"
+                             />
+                             <div className="flex gap-1 w-1/3">
+                               {!catObj.isSub && (
+                                 <input
+                                   type="text"
+                                   id={`newSubCategory-${catObj.full}`}
+                                   placeholder="New Sub"
+                                   className="w-full px-2 py-2 border border-zinc-300 dark:border-zinc-700 rounded-lg bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 text-xs"
+                                 />
+                               )}
+                               {!catObj.isSub && (
+                                 <button
+                                   onClick={() => {
+                                     const input = document.getElementById(`newSubCategory-${catObj.full}`) as HTMLInputElement;
+                                     if (input.value) {
+                                       const newKey = `${catObj.full} > ${input.value}`;
+                                       const newAlloc = { ...idealAllocation, [newKey]: 0 };
+                                       setIdealAllocation(newAlloc);
+                                       syncToDb({ settings: { idealAllocation: newAlloc } });
+                                       input.value = '';
+                                     }
+                                   }}
+                                   className="px-2 py-2 bg-zinc-100 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 rounded-lg hover:bg-zinc-200 dark:hover:bg-zinc-700 transition-colors text-xs"
+                                 >
+                                   Add
+                                 </button>
+                               )}
+                               <button
+                                 onClick={() => {
+                                   const newAlloc = { ...idealAllocation };
+                                   Object.keys(newAlloc).forEach(k => {
+                                     if (normalizeGroup(k) === catObj.full) delete newAlloc[k];
+                                   });
+                                   setIdealAllocation(newAlloc);
+                                   syncToDb({ settings: { idealAllocation: newAlloc } });
+                                 }}
+                                 className="text-red-500 hover:text-red-600 px-1"
+                               >
+                                 <Trash2 className="w-4 h-4" />
+                               </button>
+                             </div>
+                           </div>
+                        ))}
+                      </Fragment>
+                    ));
+                  })()}
                   <div className="flex items-center gap-3 mt-2">
                     <input
                       type="text"

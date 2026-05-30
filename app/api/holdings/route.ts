@@ -4,6 +4,33 @@ import { GoogleAuth } from 'google-auth-library';
 
 const yahoo = new YahooFinance();
 
+const safeQuote = async (symbol: string) => {
+  try {
+    return await yahoo.quote(symbol);
+  } catch (e) {
+    console.error(`Error in yahoo.quote for ${symbol}:`, e);
+    return null;
+  }
+};
+
+const safeQuoteSummary = async (symbol: string, options: any) => {
+  try {
+    return await yahoo.quoteSummary(symbol, options);
+  } catch (e) {
+    console.error(`Error in yahoo.quoteSummary for ${symbol}:`, e);
+    return null;
+  }
+};
+
+const safeSearch = async (query: string, options: any) => {
+  try {
+    return await yahoo.search(query, options);
+  } catch (e) {
+    console.error(`Error in yahoo.search for ${query}:`, e);
+    return { quotes: [] };
+  }
+};
+
 const getAuthToken = async () => {
   if (!process.env.GOOGLE_CLIENT_EMAIL || !process.env.GOOGLE_PRIVATE_KEY || !process.env.GOOGLE_SHEET_ID) {
     return null;
@@ -129,28 +156,30 @@ export async function GET(request: Request) {
 
         if (!yfSymbol.startsWith('MF_')) {
           console.log(`Fetching holdings for target symbol: ${yfSymbol}`);
-          const result = await yahoo.quoteSummary(yfSymbol, { modules: ['topHoldings', 'assetProfile'] });
+          const result = await safeQuoteSummary(yfSymbol, { modules: ['topHoldings', 'assetProfile'] });
           
-          tickertapeData = {
-            holdings: (result.topHoldings?.holdings || []).map((h: any) => ({
-              symbol: h.symbol,
-              holdingName: h.holdingName,
-              holdingPercent: h.holdingPercent
-            })),
-            sectorWeightings: ((result.assetProfile as any)?.sectorWeightings || []).map((s: any) => ({
-              sector: s.sector,
-              percentage: s.percentage * 100
-            })),
-            assetAllocation: {
-              equity: (result.topHoldings?.stockPosition || 0) * 100,
-              debt: (result.topHoldings?.bondPosition || 0) * 100,
-              cash: (result.topHoldings?.cashPosition || 0) * 100,
-              other: (result.topHoldings?.otherPosition || 0) * 100,
-            },
-            categoryName: result.assetProfile?.categoryName || null,
-            symbol: yfSymbol,
-            source: 'Yahoo Finance'
-          };
+          if (result) {
+            tickertapeData = {
+              holdings: (result.topHoldings?.holdings || []).map((h: any) => ({
+                symbol: h.symbol,
+                holdingName: h.holdingName,
+                holdingPercent: h.holdingPercent
+              })),
+              sectorWeightings: ((result.assetProfile as any)?.sectorWeightings || []).map((s: any) => ({
+                sector: s.sector,
+                percentage: s.percentage * 100
+              })),
+              assetAllocation: {
+                equity: (result.topHoldings?.stockPosition || 0) * 100,
+                debt: (result.topHoldings?.bondPosition || 0) * 100,
+                cash: (result.topHoldings?.cashPosition || 0) * 100,
+                other: (result.topHoldings?.otherPosition || 0) * 100,
+              },
+              categoryName: result.assetProfile?.categoryName || null,
+              symbol: yfSymbol,
+              source: 'Yahoo Finance'
+            };
+          }
         } else {
            console.log(`Skipping Yahoo Finance fetch because symbol is still a Tickertape SID: ${yfSymbol}`);
         }

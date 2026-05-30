@@ -4,6 +4,33 @@ import YahooFinance from 'yahoo-finance2';
 
 const yahoo = new YahooFinance();
 
+const safeQuote = async (symbol: string) => {
+  try {
+    return await yahoo.quote(symbol);
+  } catch (e) {
+    console.error(`Error in yahoo.quote for ${symbol}:`, e);
+    return null;
+  }
+};
+
+const safeQuoteSummary = async (symbol: string, options: any) => {
+  try {
+    return await yahoo.quoteSummary(symbol, options);
+  } catch (e) {
+    console.error(`Error in yahoo.quoteSummary for ${symbol}:`, e);
+    return null;
+  }
+};
+
+const safeSearch = async (query: string, options: any) => {
+  try {
+    return await yahoo.search(query, options);
+  } catch (e) {
+    console.error(`Error in yahoo.search for ${query}:`, e);
+    return { quotes: [] };
+  }
+};
+
 export const dynamic = 'force-dynamic';
 
 // Global cache for sheet data to prevent multiple redundant fetches for sequential chunks
@@ -242,7 +269,7 @@ export async function GET(request: Request) {
              if (priceUsd) {
                source = 'Metals API';
              } else {
-               const quote = await yahoo.quote(ySym) as any;
+               const quote = await safeQuote(ySym) as any;
                if (quote && quote.regularMarketPrice) {
                  priceUsd = quote.regularMarketPrice;
                  source = 'Yahoo Finance';
@@ -364,7 +391,7 @@ export async function GET(request: Request) {
               const ySym = existingData[sym]?.yahooSymbol || sym;
               try {
                 // Try direct quote first using known Yahoo Symbol or direct symbol
-                let result = await yahoo.quote(ySym).catch(() => null) as any;
+                let result = await safeQuote(ySym) as any;
                 let foundYahooSymbol = ySym;
                 
                 // If it failed to quote correctly, try finding it via Yahoo Search
@@ -377,7 +404,7 @@ export async function GET(request: Request) {
                       .replace(/Plan/gi, '').replace(/Scheme/gi, '').replace(/Index Fund/gi, '').replace(/Fund/gi, '')
                       .replace(/Index/gi, '').replace(/-/g, ' ').replace(/\s+/g, ' ').trim();
                       
-                    const ySearch = await yahoo.search(cleanName, { quotesCount: 10 }).catch(() => ({ quotes: [] })) as any;
+                    const ySearch = await safeSearch(cleanName, { quotesCount: 10 }) as any;
                     let match = ySearch.quotes.find((q: any) => 
                       (q.quoteType === 'MUTUALFUND' || q.typeDisp === 'Mutual Fund') &&
                       (q.symbol.startsWith('0P') || q.symbol.includes('.BO') || q.symbol.includes('.NS'))
@@ -385,7 +412,7 @@ export async function GET(request: Request) {
                     
                     if (!match) {
                       const simplerName = cleanName.split(' ').slice(0, 3).join(' ');
-                      const ySearch2 = await yahoo.search(simplerName, { quotesCount: 10 }).catch(() => ({ quotes: [] })) as any;
+                      const ySearch2 = await safeSearch(simplerName, { quotesCount: 10 }) as any;
                       match = ySearch2.quotes.find((q: any) => 
                         (q.quoteType === 'MUTUALFUND' || q.typeDisp === 'Mutual Fund') && 
                         (q.symbol.startsWith('0P') || q.symbol.includes('.BO') || q.symbol.includes('.NS'))
@@ -394,7 +421,7 @@ export async function GET(request: Request) {
                     
                     if (match) {
                       foundYahooSymbol = match.symbol;
-                      result = await yahoo.quote(foundYahooSymbol).catch(() => null);
+                      result = await safeQuote(foundYahooSymbol);
                     }
                   }
                 }
@@ -433,7 +460,7 @@ export async function GET(request: Request) {
                   .replace(/\s+/g, ' ')
                   .trim();
                 
-                const ySearch = await yahoo.search(cleanName, { quotesCount: 10 }) as any;
+                const ySearch = await safeSearch(cleanName, { quotesCount: 10 }) as any;
                 const match = ySearch.quotes.find((q: any) => 
                   (q.quoteType === 'MUTUALFUND' || q.typeDisp === 'Mutual Fund') && 
                   (q.symbol.startsWith('0P') || q.symbol.includes('.BO') || q.symbol.includes('.NS'))
@@ -443,7 +470,7 @@ export async function GET(request: Request) {
                   mfPrices[sym].yahooSymbol = match.symbol;
                 } else {
                   const simplerName = cleanName.split(' ').slice(0, 3).join(' ');
-                  const ySearch2 = await yahoo.search(simplerName, { quotesCount: 10 }) as any;
+                  const ySearch2 = await safeSearch(simplerName, { quotesCount: 10 }) as any;
                   const match2 = ySearch2.quotes.find((q: any) => 
                     (q.quoteType === 'MUTUALFUND' || q.typeDisp === 'Mutual Fund') && 
                     (q.symbol.startsWith('0P') || q.symbol.includes('.BO') || q.symbol.includes('.NS'))
@@ -463,7 +490,7 @@ export async function GET(request: Request) {
         // For non-MFs (Stocks), use Yahoo Finance
         try {
           const fetchSym = MANUAL_MAP[sym] || sym;
-          const quote = await yahoo.quote(fetchSym) as any;
+          const quote = await safeQuote(fetchSym) as any;
           if (quote) {
             stockPrices[sym] = {
               symbol: sym,
@@ -479,7 +506,7 @@ export async function GET(request: Request) {
             
             // Try fetching sector separately, it's less critical and often fails
             try {
-              const summary = await yahoo.quoteSummary(fetchSym, { modules: ['assetProfile'] }) as any;
+              const summary = await safeQuoteSummary(fetchSym, { modules: ['assetProfile'] }) as any;
               if (summary && summary.assetProfile && summary.assetProfile.sector) {
                 stockPrices[sym].sector = summary.assetProfile.sector;
               }
