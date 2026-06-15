@@ -5,3 +5,8 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Dev tools / agent state
+.omo/
+.claude/
+bun.lock
