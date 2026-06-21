@@ -612,7 +612,8 @@ export async function GET(request: Request) {
           if (isMF || isIndian) currencyFormula = `INR`;
           else if (isUsdAsset) currencyFormula = `USD`;
 
-          const typeFormula = sym === 'GOLD-INR-GRAM' ? `COMMODITY` : (isMF ? `MUTUALFUND` : `EQUITY`);
+          const actualType = stockPrices[sym]?.quoteType || existingData[sym]?.quoteType || (isMF ? "MUTUALFUND" : "EQUITY");
+          const typeFormula = sym === "GOLD-INR-GRAM" ? "COMMODITY" : (actualType === "ETF" ? "ETF" : (isMF ? "MUTUALFUND" : "EQUITY"));
           if (sym === 'GOLD-INR-GRAM') sector = 'Precious Metals';
           
           const fallbackMarketCap = stockPrices[sym]?.marketCap ? stockPrices[sym].marketCap : '""';
@@ -685,7 +686,8 @@ export async function GET(request: Request) {
           if (isMF || isIndian) currencyFormula = `INR`;
           else if (isUsdAsset) currencyFormula = `USD`;
 
-          const typeFormula = sym === 'GOLD-INR-GRAM' ? `COMMODITY` : (isMF ? `MUTUALFUND` : `EQUITY`);
+          const actualType = stockPrices[sym]?.quoteType || existingData[sym]?.quoteType || (isMF ? "MUTUALFUND" : "EQUITY");
+          const typeFormula = sym === "GOLD-INR-GRAM" ? "COMMODITY" : (actualType === "ETF" ? "ETF" : (isMF ? "MUTUALFUND" : "EQUITY"));
           if (sym === 'GOLD-INR-GRAM') sector = 'Precious Metals';
           
           const fallbackMarketCap = stockPrices[sym]?.marketCap ? stockPrices[sym].marketCap : '""';
