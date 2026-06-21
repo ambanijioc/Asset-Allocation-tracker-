@@ -202,7 +202,7 @@ export async function GET(request: Request) {
           symbol: `MF_${mf.schemeCode}`,
           shortname: mf.schemeName,
           longname: mf.schemeName,
-          quoteType: 'MUTUALFUND',
+          quoteType: mf.schemeName?.toUpperCase().includes("ETF") ? "ETF" : "MUTUALFUND",
           source: 'MFAPI'
         }));
       } else {
@@ -213,7 +213,7 @@ export async function GET(request: Request) {
             symbol: `MF_${mf.schemeCode}`,
             shortname: mf.schemeName,
             longname: mf.schemeName,
-            quoteType: 'MUTUALFUND',
+            quoteType: mf.schemeName?.toUpperCase().includes("ETF") ? "ETF" : "MUTUALFUND",
             source: 'MFAPI'
           }));
         }, [], 'q');
