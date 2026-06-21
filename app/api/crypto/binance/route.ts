@@ -8,7 +8,7 @@ export async function GET() {
   const secret = process.env.BINANCE_SECRET;
 
   if (!apiKey || !secret) {
-    return NextResponse.json({ error: error.message || String(error) }, { status: 500 });
+    return NextResponse.json({ error: "Missing Binance API keys in Render Environment" }, { status: 400 });
   }
 
   try {
@@ -62,6 +62,6 @@ export async function GET() {
     return NextResponse.json(cryptoAssets);
   } catch (error: any) {
     // Silently handle errors to prevent breaking the dashboard
-    return NextResponse.json({ error: error.message || String(error) }, { status: 500 });
+    return NextResponse.json({ error: "Missing Binance API keys in Render Environment" }, { status: 400 });
   }
 }
