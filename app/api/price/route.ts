@@ -45,9 +45,18 @@ const safeQuoteSummary = async (symbol: string, options: any) => {
 
 const safeSearch = async (query: string, options: any) => {
   try {
-    return await yahoo.search(query, options);
+    const count = options?.quotesCount || 10;
+    const res = await fetch(`https://query2.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(query)}&quotesCount=${count}&newsCount=0`, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'application/json'
+      }
+    });
+    if (!res.ok) throw new Error(`Yahoo search fetch failed: ${res.status}`);
+    const data = await res.json();
+    return data || { quotes: [] };
   } catch (e) {
-    console.error(`Error in yahoo.search for ${query}:`, e);
+    console.error(`Error in direct Yahoo search for ${query}:`, e);
     return { quotes: [] };
   }
 };

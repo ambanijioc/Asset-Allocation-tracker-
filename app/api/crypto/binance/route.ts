@@ -8,7 +8,7 @@ export async function GET() {
   const secret = process.env.BINANCE_SECRET;
 
   if (!apiKey || !secret) {
-    return NextResponse.json([]);
+    return NextResponse.json({ error: error.message || String(error) }, { status: 500 });
   }
 
   try {
@@ -62,6 +62,6 @@ export async function GET() {
     return NextResponse.json(cryptoAssets);
   } catch (error: any) {
     // Silently handle errors to prevent breaking the dashboard
-    return NextResponse.json([]);
+    return NextResponse.json({ error: error.message || String(error) }, { status: 500 });
   }
 }
