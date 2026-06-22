@@ -136,6 +136,9 @@ const PriceStatusIndicator = ({ lastUpdated, isFetching, symbol }: { lastUpdated
 export default function Dashboard() {
   const [binanceAssets, setBinanceAssets] = useState<Asset[]>([]);
   const [coindcxAssets, setCoindcxAssets] = useState<Asset[]>([]);
+  const [binanceStatus, setBinanceStatus] = useState<{ state: 'connecting' | 'connected' | 'error' | 'cached', lastSynced?: number, error?: string }>({ state: 'connecting' });
+  const [coindcxStatus, setCoindcxStatus] = useState<{ state: 'connecting' | 'connected' | 'error' | 'cached', lastSynced?: number, error?: string }>({ state: 'connecting' });
+  const [cachedCrypto, setCachedCrypto] = useState<any>(null);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<'portfolio' | 'screener'>('portfolio');
   const [isAllocationSettingsOpen, setIsAllocationSettingsOpen] = useState(false);
@@ -185,7 +188,18 @@ export default function Dashboard() {
     handleExportData, handleImportData, handleRestoreFromMongo, forceRefreshHoldings
   } = usePortfolioData(user, isAuthReady);
 
-  const { prices, setPrices, isLoadingPrices, priceProgress, fetchPrices } = usePrices(assets, fundHoldings);
+  const pricingAssets = useMemo(() => {
+    const list = [...assets];
+    if (binanceStatus.state === 'cached') {
+      list.push(...binanceAssets.map(a => ({ ...a, symbol: a.symbol.replace('/USDT', '-USD') })));
+    }
+    if (coindcxStatus.state === 'cached') {
+      list.push(...coindcxAssets.map(a => ({ ...a, symbol: a.symbol.replace('/USDT', '-USD') })));
+    }
+    return list;
+  }, [assets, binanceStatus.state, binanceAssets, coindcxStatus.state, coindcxAssets]);
+
+  const { prices, setPrices, isLoadingPrices, priceProgress, fetchPrices } = usePrices(pricingAssets, fundHoldings);
 
   const mergedAssets = useMemo(() => [...assets, ...binanceAssets, ...coindcxAssets], [assets, binanceAssets, coindcxAssets]);
 
@@ -256,7 +270,8 @@ export default function Dashboard() {
     if (!isAuthReady || !user) return;
     
     // Helper to generic exchange fetch
-    const fetchExchange = async (url: string, setter: (assets: Asset[]) => void, exchangeName: string) => {
+    const fetchExchange = async (url: string, setter: (assets: Asset[]) => void, exchangeName: string, setStatus: any) => {
+      setStatus({ state: 'connecting' });
       try {
         const res = await fetch(url);
         const text = await res.text();
@@ -264,17 +279,23 @@ export default function Dashboard() {
         try {
           data = JSON.parse(text);
         } catch (e) {
-          console.error(`${exchangeName} fetch error:\nUnexpected token '<', "${text.substring(0, 15)}"... is not valid JSON`);
-          return;
+          throw new Error('API returned invalid JSON (HTML error page)');
         }
 
+        if (data && data.error) throw new Error(data.error);
+
         if (Array.isArray(data)) {
-          setter(data.map((a: any) => ({
+          const mapped = data.map((a: any) => ({
             ...a,
             id: `${exchangeName.toLowerCase()}-${a.name}`,
             entryPrice: 0,
             currency: 'USD'
-          })));
+          }));
+          setter(mapped);
+          setStatus({ state: 'connected', lastSynced: Date.now() });
+          
+          // Background sync to Firebase
+          syncToDb({ [`cachedCrypto.${exchangeName.toLowerCase()}`]: { lastSynced: Date.now(), assets: mapped } });
 
           setPrices(prev => {
             const newPrices = { ...prev };
@@ -294,16 +315,29 @@ export default function Dashboard() {
             return newPrices;
           });
         } else {
-          console.error(`Failed to fetch ${exchangeName} assets:`, data?.error || 'Unknown format');
+          throw new Error('Unknown response format');
         }
-      } catch (err) {
+      } catch (err: any) {
         console.error(`${exchangeName} fetch error:`, err);
+        setStatus({ state: 'error', error: err.message });
       }
     };
 
-    fetchExchange('/api/crypto/binance', setBinanceAssets, 'Binance');
-    fetchExchange('/api/crypto/coindcx', setCoindcxAssets, 'CoinDCX');
+    fetchExchange('/api/crypto/binance', setBinanceAssets, 'Binance', setBinanceStatus);
+    fetchExchange('/api/crypto/coindcx', setCoindcxAssets, 'CoinDCX', setCoindcxStatus);
   }, [user, isAuthReady]);
+  useEffect(() => {
+    if (!cachedCrypto) return;
+    if (binanceStatus.state === 'error' && cachedCrypto.binance) {
+       setBinanceAssets(cachedCrypto.binance.assets.map((a: any) => ({ ...a, source: 'Cached', id: `cached-binance-${a.name}` })));
+       setBinanceStatus({ state: 'cached', lastSynced: cachedCrypto.binance.lastSynced });
+    }
+    if (coindcxStatus.state === 'error' && cachedCrypto.coindcx) {
+       setCoindcxAssets(cachedCrypto.coindcx.assets.map((a: any) => ({ ...a, source: 'Cached', id: `cached-coindcx-${a.name}` })));
+       setCoindcxStatus({ state: 'cached', lastSynced: cachedCrypto.coindcx.lastSynced });
+    }
+  }, [binanceStatus.state, coindcxStatus.state, cachedCrypto]);
+
 
   useEffect(() => {
     if (!isAuthReady || !user) return;
@@ -314,6 +348,7 @@ export default function Dashboard() {
         const data = docSnap.data();
         if (data.assets) setAssets(data.assets);
         if (data.fundHoldings) setFundHoldings(data.fundHoldings);
+        if (data.cachedCrypto) setCachedCrypto(data.cachedCrypto);
         if (data.settings) {
           if (data.settings.idealAllocation) {
             let loadedAllocation = { ...data.settings.idealAllocation };
@@ -848,7 +883,21 @@ export default function Dashboard() {
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
           <div>
             <h1 className="text-3xl font-bold tracking-tight">Asset Allocation Tracker</h1>
-            <p className="text-zinc-500 dark:text-zinc-400 mt-1">Track your investments in real-time</p>
+            <p className="text-zinc-500 dark:text-zinc-400 mt-1 flex flex-col md:flex-row md:items-center gap-2">
+              <span>Track your investments in real-time</span>
+              <span className="flex items-center gap-1.5 mt-1 md:mt-0">
+                {(binanceStatus.state === 'connected' || binanceStatus.state === 'cached') && (
+                  <span className={`text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded font-bold ${binanceStatus.state === 'connected' ? 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400' : 'bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400'}`}>
+                    Binance: {binanceStatus.state === 'connected' ? 'Live' : 'Cached'}
+                  </span>
+                )}
+                {(coindcxStatus.state === 'connected' || coindcxStatus.state === 'cached') && (
+                  <span className={`text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded font-bold ${coindcxStatus.state === 'connected' ? 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400' : 'bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400'}`}>
+                    CoinDCX: {coindcxStatus.state === 'connected' ? 'Live' : 'Cached'}
+                  </span>
+                )}
+              </span>
+            </p>
           </div>
           <div className="flex gap-3">
             <button 
