@@ -161,13 +161,16 @@ export async function GET(request: Request) {
       if (allMfs && allMfs.length > 0) {
         const words = q.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(Boolean);
         
+        const qNoSpaces = q.toLowerCase().replace(/\s+/g, '');
+        
         const scored = allMfs.map((mf: any) => {
           const name = mf.schemeName.toLowerCase();
+          const nameNoSpaces = name.replace(/\s+/g, '');
           let score = 0;
           let allMatched = true;
           
           for (const w of words) {
-            if (name.includes(w)) {
+            if (name.includes(w) || nameNoSpaces.includes(w)) {
               score += 10;
             } else {
               // Handle common aliases and abbreviations
@@ -185,7 +188,7 @@ export async function GET(request: Request) {
           }
           
           // Bonus for exact phrase match
-          if (name.includes(q.toLowerCase())) score += 50;
+          if (name.includes(q.toLowerCase()) || (qNoSpaces.length > 4 && nameNoSpaces.includes(qNoSpaces))) score += 50;
           
           return { ...mf, score, allMatched };
         });
