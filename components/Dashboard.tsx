@@ -5,9 +5,8 @@ import { Plus, Search, Trash2, RefreshCw, TrendingUp, TrendingDown, DollarSign, 
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RechartsTooltip, Legend, Treemap, BarChart, Bar, XAxis, YAxis, CartesianGrid } from 'recharts';
 import { v4 as uuidv4 } from 'uuid';
 import { GoogleGenAI, Type, ThinkingLevel } from '@google/genai';
-import { auth, db, signInWithGoogle, signInWithEmail, signUpWithEmail, resetPassword, logOut, handleFirestoreError, OperationType } from '@/lib/firebase';
+import { auth, signInWithGoogle, signInWithEmail, signUpWithEmail, resetPassword, logOut } from '@/lib/firebase';
 import { onAuthStateChanged, User } from 'firebase/auth';
-import { doc, setDoc, updateDoc, onSnapshot, getDoc } from 'firebase/firestore';
 import Screener from '@/components/Screener';
 
 import LoginPage from '@/components/auth/LoginPage';
@@ -138,7 +137,6 @@ export default function Dashboard() {
   const [coindcxAssets, setCoindcxAssets] = useState<Asset[]>([]);
   const [binanceStatus, setBinanceStatus] = useState<{ state: 'connecting' | 'connected' | 'error' | 'cached', lastSynced?: number, error?: string }>({ state: 'connecting' });
   const [coindcxStatus, setCoindcxStatus] = useState<{ state: 'connecting' | 'connected' | 'error' | 'cached', lastSynced?: number, error?: string }>({ state: 'connecting' });
-  const [cachedCrypto, setCachedCrypto] = useState<any>(null);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<'portfolio' | 'screener'>('portfolio');
   const [isAllocationSettingsOpen, setIsAllocationSettingsOpen] = useState(false);
@@ -177,6 +175,7 @@ export default function Dashboard() {
   const {
     assets, setAssets,
     fundHoldings, setFundHoldings, holdingsErrors, setHoldingsErrors, loadingHoldings,
+    cachedCrypto, setCachedCrypto,
     idealAllocation, setIdealAllocation,
     openRouterKey, setOpenRouterKey,
     searchSource, setSearchSource,
@@ -338,133 +337,6 @@ export default function Dashboard() {
     }
   }, [binanceStatus.state, coindcxStatus.state, cachedCrypto]);
 
-
-  useEffect(() => {
-    if (!isAuthReady || !user) return;
-
-    const userRef = doc(db, 'users', user.uid);
-    const unsubscribe = onSnapshot(userRef, async (docSnap) => {
-      if (docSnap.exists()) {
-        const data = docSnap.data();
-        if (data.assets) setAssets(data.assets);
-        if (data.fundHoldings) setFundHoldings(data.fundHoldings);
-        if (data.cachedCrypto) setCachedCrypto(data.cachedCrypto);
-        if (data.settings) {
-          if (data.settings.idealAllocation) {
-            let loadedAllocation = { ...data.settings.idealAllocation };
-            let needsSync = false;
-
-            if (loadedAllocation['Mutual Funds'] !== undefined) {
-              const mfAlloc = loadedAllocation['Mutual Funds'];
-              delete loadedAllocation['Mutual Funds'];
-              loadedAllocation['Equities'] = (loadedAllocation['Equities'] || 0) + Math.round(mfAlloc * 0.7);
-              loadedAllocation['Fixed Income'] = (loadedAllocation['Fixed Income'] || 0) + Math.round(mfAlloc * 0.3);
-              needsSync = true;
-            }
-            if (loadedAllocation['Mutual Fund - Equity'] !== undefined) {
-              loadedAllocation['Equities'] = (loadedAllocation['Equities'] || 0) + loadedAllocation['Mutual Fund - Equity'];
-              delete loadedAllocation['Mutual Fund - Equity'];
-              needsSync = true;
-            }
-            if (loadedAllocation['Mutual Fund - Debt'] !== undefined) {
-              loadedAllocation['Fixed Income'] = (loadedAllocation['Fixed Income'] || 0) + loadedAllocation['Mutual Fund - Debt'];
-              delete loadedAllocation['Mutual Fund - Debt'];
-              needsSync = true;
-            }
-            if (loadedAllocation['Debt'] !== undefined) {
-              loadedAllocation['Fixed Income'] = (loadedAllocation['Fixed Income'] || 0) + loadedAllocation['Debt'];
-              delete loadedAllocation['Debt'];
-              needsSync = true;
-            }
-            if (loadedAllocation['Debt and Fixed'] !== undefined) {
-              loadedAllocation['Fixed Income'] = (loadedAllocation['Fixed Income'] || 0) + loadedAllocation['Debt and Fixed'];
-              delete loadedAllocation['Debt and Fixed'];
-              needsSync = true;
-            }
-            if (loadedAllocation['Domestic Equity'] !== undefined) {
-              const val = loadedAllocation['Domestic Equity'];
-              delete loadedAllocation['Domestic Equity'];
-              loadedAllocation['Equities > Domestic Equity'] = val;
-              needsSync = true;
-            }
-            if (loadedAllocation['Global Equity'] !== undefined) {
-              const val = loadedAllocation['Global Equity'];
-              delete loadedAllocation['Global Equity'];
-              loadedAllocation['Equities > Global Equity'] = val;
-              needsSync = true;
-            }
-            if (loadedAllocation['Gold'] !== undefined) {
-              const val = loadedAllocation['Gold'];
-              delete loadedAllocation['Gold'];
-              loadedAllocation['Commodities > Gold'] = val;
-              needsSync = true;
-            }
-            if (loadedAllocation['Silver'] !== undefined) {
-              const val = loadedAllocation['Silver'];
-              delete loadedAllocation['Silver'];
-              loadedAllocation['Commodities > Silver'] = val;
-              needsSync = true;
-            }
-
-            if (needsSync) {
-              syncToDb({ settings: { idealAllocation: loadedAllocation } });
-            }
-            setIdealAllocation(loadedAllocation);
-          }
-          if (data.settings.searchSource) setSearchSource(data.settings.searchSource);
-          if (data.settings.openRouterKey) setOpenRouterKey(data.settings.openRouterKey);
-          if (data.settings.aiProvider) setAiProvider(data.settings.aiProvider);
-          if (data.settings.googleModel) {
-            const validModels = ['gemini-3.1-flash-lite-preview', 'gemini-3.1-pro-preview', 'gemini-flash-latest'];
-            if (validModels.includes(data.settings.googleModel)) {
-              setGoogleModel(data.settings.googleModel);
-            } else {
-              setGoogleModel('gemini-3.1-flash-lite-preview');
-              syncToDb({ settings: { googleModel: 'gemini-3.1-flash-lite-preview' } });
-            }
-          }
-          if (data.settings.openrouterModel) {
-            if (data.settings.openrouterModel === 'openrouter/free' || data.settings.openrouterModel === 'google/gemini-2.5-flash:free') {
-              setSelectedModel('meta-llama/llama-3.3-70b-instruct:free');
-              syncToDb({ settings: { openrouterModel: 'meta-llama/llama-3.3-70b-instruct:free' } });
-            } else {
-              setSelectedModel(data.settings.openrouterModel);
-            }
-          }
-        }
-      } else {
-        // Initialize empty document if it doesn't exist
-        try {
-          const initialData = {
-            uid: user.uid,
-            assets: [],
-            fundHoldings: {},
-            settings: {}
-          };
-          
-          await setDoc(userRef, initialData);
-          
-          // Sync back to Mongo under new UID
-          await fetch('/api/sync', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              uid: user.uid,
-              email: user.email,
-              displayName: user.displayName,
-              data: initialData
-            })
-          });
-        } catch (e) {
-          console.error("Initialization failed", e);
-        }
-      }
-    }, (error) => {
-      handleFirestoreError(error, OperationType.GET, `users/${user.uid}`);
-    });
-
-    return () => unsubscribe();
-  }, [user, isAuthReady]);
 
   useEffect(() => {
     // Fetch available free models
@@ -1493,6 +1365,52 @@ export default function Dashboard() {
                             ({percent}%)
                           </span>
                         </div>
+
+                        {(() => {
+                          const symbol = entry.constituents[0]?.symbol;
+                          const alloc = symbol ? fundHoldings[symbol]?.assetAllocation : null;
+                          
+                          if (!alloc) return null;
+                          
+                          return (
+                            <div className="flex flex-col gap-1.5">
+                              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-zinc-500 uppercase tracking-wider font-medium">
+                                {alloc.stockPosition > 0 && (
+                                  <div className="flex items-center gap-1.5">
+                                    <div className="w-1.5 h-1.5 rounded-full bg-blue-500" />
+                                    <span>Equity: {alloc.stockPosition.toFixed(1)}%</span>
+                                  </div>
+                                )}
+                                {alloc.bondPosition > 0 && (
+                                  <div className="flex items-center gap-1.5">
+                                    <div className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                                    <span>Debt: {alloc.bondPosition.toFixed(1)}%</span>
+                                  </div>
+                                )}
+                                {alloc.cashPosition > 0 && (
+                                  <div className="flex items-center gap-1.5">
+                                    <div className="w-1.5 h-1.5 rounded-full bg-purple-500" />
+                                    <span>Cash: {alloc.cashPosition.toFixed(1)}%</span>
+                                  </div>
+                                )}
+                                {alloc.otherPosition > 0 && (
+                                  <div className="flex items-center gap-1.5">
+                                    <div className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                                    <span>Other: {alloc.otherPosition.toFixed(1)}%</span>
+                                  </div>
+                                )}
+                              </div>
+
+                              <div className="w-full h-1.5 bg-zinc-200 dark:bg-zinc-700 rounded-full overflow-hidden flex">
+                                {alloc.stockPosition > 0 && <div className="h-full bg-blue-500 transition-all duration-500" style={{ width: `${alloc.stockPosition}%` }} />}
+                                {alloc.bondPosition > 0 && <div className="h-full bg-emerald-500 transition-all duration-500" style={{ width: `${alloc.bondPosition}%` }} />}
+                                {alloc.cashPosition > 0 && <div className="h-full bg-purple-500 transition-all duration-500" style={{ width: `${alloc.cashPosition}%` }} />}
+                                {alloc.otherPosition > 0 && <div className="h-full bg-amber-500 transition-all duration-500" style={{ width: `${alloc.otherPosition}%` }} />}
+                              </div>
+                            </div>
+                          );
+                        })()}
+
                         {expandedFunds[entry.name] && entry.constituents && entry.constituents.length > 0 && (
                           <div className="mt-2 pt-3 border-t border-zinc-200 dark:border-zinc-700 space-y-4">
                             <div>
@@ -1522,53 +1440,6 @@ export default function Dashboard() {
                                 </div>
                               ))}
                             </div>
-
-                            {(() => {
-                              const symbol = entry.constituents[0]?.symbol;
-                              const alloc = symbol ? fundHoldings[symbol]?.assetAllocation : null;
-                              
-                              if (!alloc) return null;
-                              
-                              return (
-                                <div>
-                                  <div className="text-[10px] uppercase tracking-wider text-zinc-500 font-bold mb-2">Asset Allocation:</div>
-                                  
-                                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-zinc-500 uppercase tracking-wider font-medium mb-2">
-                                    {alloc.stockPosition > 0 && (
-                                      <div className="flex items-center gap-1.5">
-                                        <div className="w-1.5 h-1.5 rounded-full bg-blue-500" />
-                                        <span>Equity: {alloc.stockPosition.toFixed(1)}%</span>
-                                      </div>
-                                    )}
-                                    {alloc.bondPosition > 0 && (
-                                      <div className="flex items-center gap-1.5">
-                                        <div className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                                        <span>Debt: {alloc.bondPosition.toFixed(1)}%</span>
-                                      </div>
-                                    )}
-                                    {alloc.cashPosition > 0 && (
-                                      <div className="flex items-center gap-1.5">
-                                        <div className="w-1.5 h-1.5 rounded-full bg-purple-500" />
-                                        <span>Cash: {alloc.cashPosition.toFixed(1)}%</span>
-                                      </div>
-                                    )}
-                                    {alloc.otherPosition > 0 && (
-                                      <div className="flex items-center gap-1.5">
-                                        <div className="w-1.5 h-1.5 rounded-full bg-amber-500" />
-                                        <span>Other: {alloc.otherPosition.toFixed(1)}%</span>
-                                      </div>
-                                    )}
-                                  </div>
-
-                                  <div className="w-full h-1.5 bg-zinc-200 dark:bg-zinc-700 rounded-full overflow-hidden flex">
-                                    {alloc.stockPosition > 0 && <div className="h-full bg-blue-500 transition-all duration-500" style={{ width: `${alloc.stockPosition}%` }} />}
-                                    {alloc.bondPosition > 0 && <div className="h-full bg-emerald-500 transition-all duration-500" style={{ width: `${alloc.bondPosition}%` }} />}
-                                    {alloc.cashPosition > 0 && <div className="h-full bg-purple-500 transition-all duration-500" style={{ width: `${alloc.cashPosition}%` }} />}
-                                    {alloc.otherPosition > 0 && <div className="h-full bg-amber-500 transition-all duration-500" style={{ width: `${alloc.otherPosition}%` }} />}
-                                  </div>
-                                </div>
-                              );
-                            })()}
 
                             <div>
                               <div className="flex items-center justify-between mb-2">

@@ -113,7 +113,7 @@ export function usePortfolioCalculations({
     const topCategoryRaw = asset.categoryPath && asset.categoryPath.length > 0 ? asset.categoryPath[0] : asset.type;
     const topCategory = normalizeCategory(topCategoryRaw);
     
-    if ((topCategory === 'Mutual Funds' || topCategory === 'ETF') && fundHoldings[asset.symbol]?.assetAllocation) {
+    if ((topCategory === 'Mutual Funds' || topCategory === 'ETFs') && fundHoldings[asset.symbol]?.assetAllocation) {
       const alloc = fundHoldings[asset.symbol].assetAllocation;
       const totalAlloc = (alloc.stockPosition || 0) + (alloc.bondPosition || 0) + (alloc.cashPosition || 0) + (alloc.otherPosition || 0) + (alloc.preferredPosition || 0) + (alloc.convertiblePosition || 0);
       
@@ -424,7 +424,7 @@ export function usePortfolioCalculations({
     const topCategory = normalizeCategory(topCategoryRaw);
     const fundData = fundHoldings[asset.symbol];
     
-    if ((topCategory === 'Mutual Funds' || topCategory === 'ETF') && fundData?.assetAllocation) {
+    if ((topCategory === 'Mutual Funds' || topCategory === 'ETFs') && fundData?.assetAllocation) {
       const alloc = fundData.assetAllocation;
       const totalAlloc = (alloc.stockPosition || 0) + (alloc.bondPosition || 0) + (alloc.cashPosition || 0) + (alloc.otherPosition || 0) + (alloc.preferredPosition || 0) + (alloc.convertiblePosition || 0);
       if (totalAlloc > 0) {
@@ -623,7 +623,7 @@ export function usePortfolioCalculations({
     const topCategory = normalizeCategory(topCategoryRaw);
     const fundData = fundHoldings[asset.symbol];
     
-    if ((topCategory === 'Mutual Funds' || topCategory === 'ETF') && fundData?.assetAllocation) {
+    if ((topCategory === 'Mutual Funds' || topCategory === 'ETFs') && fundData?.assetAllocation) {
       const alloc = fundData.assetAllocation;
       const totalAlloc = (alloc.stockPosition || 0) + (alloc.bondPosition || 0) + (alloc.cashPosition || 0) + (alloc.otherPosition || 0) + (alloc.preferredPosition || 0) + (alloc.convertiblePosition || 0);
       if (totalAlloc > 0) {

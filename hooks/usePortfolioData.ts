@@ -12,6 +12,7 @@ export function usePortfolioData(
   const [fundHoldings, setFundHoldings] = useState<Record<string, any>>({});
   const [holdingsErrors, setHoldingsErrors] = useState<Record<string, string>>({});
   const loadingHoldings = useRef<Record<string, boolean>>({});
+  const [cachedCrypto, setCachedCrypto] = useState<any>(null);
 
   const [idealAllocation, setIdealAllocation] = useState<Record<string, number>>({
     'Equities': 60,
@@ -56,6 +57,12 @@ export function usePortfolioData(
       if (cleanUpdates.settings) {
         for (const [key, value] of Object.entries(cleanUpdates.settings)) {
           firestoreUpdates[`settings.${key}`] = value;
+        }
+      }
+      // Forward dot-notation keys (e.g. cachedCrypto.binance) directly to Firestore
+      for (const [key, value] of Object.entries(cleanUpdates)) {
+        if (key.includes('.')) {
+          firestoreUpdates[key] = value;
         }
       }
 
@@ -280,11 +287,32 @@ export function usePortfolioData(
           }
         }
 
-        if (!data || !isMounted) return;
+        if (!isMounted) return;
+
+        // 2b. If neither source has data, initialize new user
+        if (!data) {
+          const initialData = {
+            uid: user.uid,
+            assets: [],
+            fundHoldings: {},
+            settings: {}
+          };
+          // Initialize in Firebase
+          const userRef = doc(db, 'users', user.uid);
+          await setDoc(userRef, initialData);
+          // Initialize in MongoDB
+          await fetch('/api/sync', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ uid: user.uid, email: user.email, displayName: user.displayName, data: initialData })
+          });
+          return;
+        }
 
         // 3. Apply Data to State
         if (data.assets) setAssets(data.assets);
         if (data.fundHoldings) setFundHoldings(data.fundHoldings);
+        if (data.cachedCrypto) setCachedCrypto(data.cachedCrypto);
         
         if (data.settings) {
           if (data.settings.idealAllocation) {
@@ -471,6 +499,7 @@ export function usePortfolioData(
   return {
     assets, setAssets,
     fundHoldings, setFundHoldings,
+    cachedCrypto, setCachedCrypto,
     holdingsErrors, setHoldingsErrors,
     loadingHoldings,
     idealAllocation, setIdealAllocation,
