@@ -132,6 +132,92 @@ const PriceStatusIndicator = ({ lastUpdated, isFetching, symbol }: { lastUpdated
   );
 };
 
+const RecursiveAllocationRow = ({ node, depth = 0, expandedCategories, setExpandedCategories }: any) => {
+  const isExpanded = expandedCategories[node.fullPath];
+  const hasChildren = node.subCategories && node.subCategories.length > 0;
+  const hasConstituents = node.constituents && node.constituents.length > 0;
+  const isClickable = hasChildren || hasConstituents;
+
+  const toggleExpand = () => {
+    if (isClickable) {
+      setExpandedCategories((prev: any) => ({ ...prev, [node.fullPath]: !prev[node.fullPath] }));
+    }
+  };
+
+  const plClass = depth === 0 ? 'px-6' : depth === 1 ? 'pl-12 pr-6' : depth === 2 ? 'pl-18 pr-6' : 'pl-24 pr-6';
+  const plBorderClass = depth === 0 ? 'pl-6' : depth === 1 ? 'pl-16' : depth === 2 ? 'pl-22' : 'pl-28';
+
+  return (
+    <Fragment>
+      <tr 
+        className={`${depth === 0 ? 'hover:bg-zinc-50 dark:hover:bg-zinc-900/50' : 'bg-zinc-50/30 dark:bg-zinc-900/10 hover:bg-zinc-50 dark:hover:bg-zinc-900/50'} transition-colors ${isClickable ? 'cursor-pointer' : ''}`}
+        onClick={toggleExpand}
+      >
+        <td className={`${plClass} py-4 font-medium flex items-center gap-2 ${depth > 0 ? 'text-zinc-600 dark:text-zinc-400' : ''}`}>
+          {isClickable && (
+            isExpanded ? <ChevronDown className="w-4 h-4 text-zinc-400" /> : <ChevronRight className="w-4 h-4 text-zinc-400" />
+          )}
+          {node.category}
+          {node.category === 'Cash' && depth === 0 && (
+            <div className="group relative flex items-center">
+              <Info className="w-4 h-4 text-zinc-400 cursor-help" />
+              <div className="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 hidden group-hover:block w-64 p-3 bg-zinc-800 text-xs text-zinc-100 rounded-lg shadow-xl z-10 text-center leading-relaxed">
+                Includes your direct cash holdings plus the cash portion of your mutual funds. Mutual funds hold cash for liquidity, handling redemptions, or waiting for investment opportunities.
+                <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-zinc-800"></div>
+              </div>
+            </div>
+          )}
+        </td>
+        <td className={`px-6 py-4 text-right ${depth > 0 ? 'text-zinc-600 dark:text-zinc-400' : ''}`}>₹{node.currentValue.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</td>
+        <td className={`px-6 py-4 text-right ${depth > 0 ? 'text-zinc-600 dark:text-zinc-400' : ''}`}>{node.currentPercentage.toFixed(1)}%</td>
+        <td className={`px-6 py-4 text-right ${depth > 0 ? 'text-zinc-600 dark:text-zinc-400' : ''}`}>{node.idealPercentage.toFixed(1)}%</td>
+        <td className={`px-6 py-4 text-right font-medium ${node.diffPercentage > 1 ? 'text-red-500' : node.diffPercentage < -1 ? 'text-blue-500' : 'text-emerald-500'}`}>
+          {node.diffPercentage > 0 ? '+' : ''}{node.diffPercentage.toFixed(1)}%
+        </td>
+        <td className="px-6 py-4 text-right">
+          {node.diffPercentage > 2 ? (
+            <span className="text-red-500 font-medium">Reduce by ₹{Math.abs(node.diffValue).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span>
+          ) : node.diffPercentage < -2 ? (
+            <span className="text-blue-500 font-medium">Invest ₹{Math.abs(node.diffValue).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span>
+          ) : (
+            <span className="text-emerald-500 font-medium">On Track</span>
+          )}
+        </td>
+      </tr>
+
+      {isExpanded && hasChildren && node.subCategories.map((subNode: any, idx: number) => (
+        <RecursiveAllocationRow 
+          key={`${subNode.fullPath}-${idx}`} 
+          node={subNode} 
+          depth={depth + 1} 
+          expandedCategories={expandedCategories} 
+          setExpandedCategories={setExpandedCategories} 
+        />
+      ))}
+
+      {isExpanded && !hasChildren && hasConstituents && (
+        <tr className="bg-zinc-50/50 dark:bg-zinc-900/20">
+          <td colSpan={6} className="px-6 py-4">
+            <div className={`${plBorderClass} border-l-2 border-zinc-200 dark:border-zinc-700 space-y-2`}>
+              {node.constituents.map((constituent: any, cIdx: number) => (
+                <div key={`${constituent.symbol || constituent.name}-${cIdx}`} className="flex justify-between text-sm">
+                  <span className="text-zinc-600 dark:text-zinc-400">{constituent.name} <span className="text-xs opacity-50">({constituent.symbol})</span></span>
+                  <span className="font-medium text-zinc-700 dark:text-zinc-300">
+                    ₹{constituent.value.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                    <span className="text-xs text-zinc-500 ml-2 inline-block w-12 text-right">
+                      {((constituent.value / node.currentValue) * 100).toFixed(1)}%
+                    </span>
+                  </span>
+                </div>
+              ))}
+            </div>
+          </td>
+        </tr>
+      )}
+    </Fragment>
+  );
+};
+
 export default function Dashboard() {
   const [binanceAssets, setBinanceAssets] = useState<Asset[]>([]);
   const [coindcxAssets, setCoindcxAssets] = useState<Asset[]>([]);
@@ -1688,121 +1774,12 @@ export default function Dashboard() {
                 </thead>
                 <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
                   {allocationAnalysis.map((item, index) => (
-                    <Fragment key={`category-${item.category}-${index}`}>
-                      <tr 
-                        className={`hover:bg-zinc-50 dark:hover:bg-zinc-900/50 transition-colors ${(item.constituents && item.constituents.length > 0) || (item.subCategories && item.subCategories.length > 0) ? 'cursor-pointer' : ''}`}
-                        onClick={() => {
-                          if ((item.constituents && item.constituents.length > 0) || (item.subCategories && item.subCategories.length > 0)) {
-                            setExpandedCategories(prev => ({ ...prev, [item.category]: !prev[item.category] }));
-                          }
-                        }}
-                      >
-                        <td className="px-6 py-4 font-medium flex items-center gap-2">
-                          {((item.constituents && item.constituents.length > 0) || (item.subCategories && item.subCategories.length > 0)) && (
-                            expandedCategories[item.category] ? <ChevronDown className="w-4 h-4 text-zinc-400" /> : <ChevronRight className="w-4 h-4 text-zinc-400" />
-                          )}
-                          {item.category}
-                          {item.category === 'Cash' && (
-                            <div className="group relative flex items-center">
-                              <Info className="w-4 h-4 text-zinc-400 cursor-help" />
-                              <div className="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 hidden group-hover:block w-64 p-3 bg-zinc-800 text-xs text-zinc-100 rounded-lg shadow-xl z-10 text-center leading-relaxed">
-                                Includes your direct cash holdings plus the cash portion of your mutual funds. Mutual funds hold cash for liquidity, handling redemptions, or waiting for investment opportunities.
-                                <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-zinc-800"></div>
-                              </div>
-                            </div>
-                          )}
-                        </td>
-                        <td className="px-6 py-4 text-right">₹{item.currentValue.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</td>
-                        <td className="px-6 py-4 text-right">{item.currentPercentage.toFixed(1)}%</td>
-                        <td className="px-6 py-4 text-right">{item.idealPercentage}%</td>
-                        <td className={`px-6 py-4 text-right font-medium ${item.diffPercentage > 1 ? 'text-red-500' : item.diffPercentage < -1 ? 'text-blue-500' : 'text-emerald-500'}`}>
-                          {item.diffPercentage > 0 ? '+' : ''}{item.diffPercentage.toFixed(1)}%
-                        </td>
-                        <td className="px-6 py-4 text-right">
-                          {item.diffPercentage > 2 ? (
-                            <span className="text-red-500 font-medium">Reduce by ₹{Math.abs(item.diffValue).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span>
-                          ) : item.diffPercentage < -2 ? (
-                            <span className="text-blue-500 font-medium">Invest ₹{Math.abs(item.diffValue).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span>
-                          ) : (
-                            <span className="text-emerald-500 font-medium">On Track</span>
-                          )}
-                        </td>
-                      </tr>
-                      {expandedCategories[item.category] && item.subCategories && item.subCategories.length > 0 && (
-                        item.subCategories.map((sub: any, subIndex: number) => (
-                          <Fragment key={`${item.category}-${sub.category}-${subIndex}`}>
-                            <tr 
-                              className={`bg-zinc-50/30 dark:bg-zinc-900/10 hover:bg-zinc-50 dark:hover:bg-zinc-900/50 transition-colors ${sub.constituents && sub.constituents.length > 0 ? 'cursor-pointer' : ''}`}
-                              onClick={() => {
-                                if (sub.constituents && sub.constituents.length > 0) {
-                                  setExpandedCategories(prev => ({ ...prev, [sub.category]: !prev[sub.category] }));
-                                }
-                              }}
-                            >
-                              <td className="px-6 py-4 font-medium flex items-center gap-2 pl-12 text-zinc-600 dark:text-zinc-400">
-                                {sub.constituents && sub.constituents.length > 0 && (
-                                  expandedCategories[sub.category] ? <ChevronDown className="w-4 h-4 text-zinc-400" /> : <ChevronRight className="w-4 h-4 text-zinc-400" />
-                                )}
-                                {sub.category}
-                              </td>
-                              <td className="px-6 py-4 text-right text-zinc-600 dark:text-zinc-400">₹{sub.currentValue.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</td>
-                              <td className="px-6 py-4 text-right text-zinc-600 dark:text-zinc-400">{sub.currentPercentage.toFixed(1)}%</td>
-                              <td className="px-6 py-4 text-right text-zinc-600 dark:text-zinc-400">{sub.idealPercentage}%</td>
-                              <td className={`px-6 py-4 text-right font-medium ${sub.diffPercentage > 1 ? 'text-red-500' : sub.diffPercentage < -1 ? 'text-blue-500' : 'text-emerald-500'}`}>
-                                {sub.diffPercentage > 0 ? '+' : ''}{sub.diffPercentage.toFixed(1)}%
-                              </td>
-                              <td className="px-6 py-4 text-right">
-                                {sub.diffPercentage > 2 ? (
-                                  <span className="text-red-500 font-medium">Reduce by ₹{Math.abs(sub.diffValue).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span>
-                                ) : sub.diffPercentage < -2 ? (
-                                  <span className="text-blue-500 font-medium">Invest ₹{Math.abs(sub.diffValue).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span>
-                                ) : (
-                                  <span className="text-emerald-500 font-medium">On Track</span>
-                                )}
-                              </td>
-                            </tr>
-                            {expandedCategories[sub.category] && sub.constituents && sub.constituents.length > 0 && (
-                              <tr className="bg-zinc-50/50 dark:bg-zinc-900/20">
-                                <td colSpan={6} className="px-6 py-4">
-                                  <div className="pl-16 border-l-2 border-zinc-200 dark:border-zinc-700 space-y-2">
-                                    {sub.constituents.map((constituent: any, cIdx: number) => (
-                                      <div key={`${constituent.symbol || constituent.name}-${cIdx}`} className="flex justify-between text-sm">
-                                        <span className="text-zinc-600 dark:text-zinc-400">{constituent.name} <span className="text-xs opacity-50">({constituent.symbol})</span></span>
-                                        <span className="font-medium text-zinc-700 dark:text-zinc-300">
-                                          ₹{constituent.value.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
-                                          <span className="text-xs text-zinc-500 ml-2 inline-block w-12 text-right">
-                                            {((constituent.value / sub.currentValue) * 100).toFixed(1)}%
-                                          </span>
-                                        </span>
-                                      </div>
-                                    ))}
-                                  </div>
-                                </td>
-                              </tr>
-                            )}
-                          </Fragment>
-                        ))
-                      )}
-                      {expandedCategories[item.category] && item.constituents && item.constituents.length > 0 && (
-                        <tr className="bg-zinc-50/50 dark:bg-zinc-900/20">
-                          <td colSpan={6} className="px-6 py-4">
-                            <div className="pl-6 border-l-2 border-zinc-200 dark:border-zinc-700 space-y-2">
-                              {item.constituents.map((constituent: any, cIdx: number) => (
-                                <div key={`${constituent.symbol || constituent.name}-${cIdx}`} className="flex justify-between text-sm">
-                                  <span className="text-zinc-600 dark:text-zinc-400">{constituent.name} <span className="text-xs opacity-50">({constituent.symbol})</span></span>
-                                  <span className="font-medium text-zinc-700 dark:text-zinc-300">
-                                    ₹{constituent.value.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
-                                    <span className="text-xs text-zinc-500 ml-2 inline-block w-12 text-right">
-                                      {((constituent.value / item.currentValue) * 100).toFixed(1)}%
-                                    </span>
-                                  </span>
-                                </div>
-                              ))}
-                            </div>
-                          </td>
-                        </tr>
-                      )}
-                    </Fragment>
+                    <RecursiveAllocationRow 
+                      key={`category-${item.fullPath}-${index}`} 
+                      node={item} 
+                      expandedCategories={expandedCategories} 
+                      setExpandedCategories={setExpandedCategories} 
+                    />
                   ))}
                 </tbody>
               </table>

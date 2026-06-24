@@ -228,97 +228,106 @@ export function usePortfolioCalculations({
     return acc;
   }, {} as Record<string, number>);
 
-  const allCategories = Array.from(new Set([
+  const allPathsSet = new Set<string>();
+  [
     ...Object.keys(consolidatedAllocation),
     ...allocationData.map(item => normalizeGroup(item.name))
-  ]));
+  ].forEach(cat => {
+    const parts = cat.split(' > ');
+    let currentPath = '';
+    parts.forEach(part => {
+      currentPath = currentPath ? `${currentPath} > ${part.trim()}` : part.trim();
+      allPathsSet.add(currentPath);
+    });
+  });
+  const allCategories = Array.from(allPathsSet);
 
-  // Pre-calculate the effective ideal percentages (supporting relative sub-category percentages)
+  // Pre-calculate the effective ideal percentages (supporting relative sub-category percentages N-levels deep)
   const effectiveIdeal: Record<string, number> = {};
-  allCategories.forEach(categoryStr => {
-    const [parentName, subName] = categoryStr.includes(' > ') ? categoryStr.split(' > ') : [categoryStr, null];
-    
-    if (subName) {
-      const parentRawIdeal = consolidatedAllocation[parentName] || 0;
+  const sortedCategories = [...allCategories].sort((a, b) => a.split('>').length - b.split('>').length);
+  
+  sortedCategories.forEach(categoryStr => {
+    const parts = categoryStr.split(' > ');
+    if (parts.length === 1) {
+      effectiveIdeal[categoryStr] = consolidatedAllocation[categoryStr] || 0;
+    } else {
+      const parentPath = parts.slice(0, -1).join(' > ');
+      const parentRawIdeal = consolidatedAllocation[parentPath] || 0;
+      const parentEffective = effectiveIdeal[parentPath] || 0;
       const rawCurrentIdeal = consolidatedAllocation[categoryStr] || 0;
+      
       if (parentRawIdeal > 0) {
-        effectiveIdeal[categoryStr] = (rawCurrentIdeal / 100) * parentRawIdeal;
+        effectiveIdeal[categoryStr] = (rawCurrentIdeal / 100) * parentEffective;
       } else {
         effectiveIdeal[categoryStr] = rawCurrentIdeal;
       }
-    } else {
-      effectiveIdeal[categoryStr] = consolidatedAllocation[categoryStr] || 0;
     }
   });
 
-  // Group categories to handle sub-categories (e.g., 'Commodities > Gold')
-  const groupedAnalysis: Record<string, any> = {};
-  
+  // Build recursive N-level tree
+  const nodeMap: Record<string, any> = {};
+
+  // Initialize all nodes
   allCategories.forEach(categoryStr => {
-    const [parentName, subName] = categoryStr.includes(' > ') ? categoryStr.split(' > ') : [categoryStr, null];
-    
-    if (!groupedAnalysis[parentName]) {
-      groupedAnalysis[parentName] = {
-        category: parentName,
-        currentValue: 0,
-        currentPercentage: 0,
-        idealPercentage: consolidatedAllocation[parentName] || 0,
-        diffPercentage: 0,
-        diffValue: 0,
-        constituents: [],
-        subCategories: [],
-        isParent: true,
-      };
-    }
+    const parts = categoryStr.split(' > ');
+    const localName = parts[parts.length - 1];
     
     const matchingItems = allocationData.filter(item => normalizeGroup(item.name) === categoryStr);
     const currentValue = matchingItems.reduce((sum, item) => sum + item.value, 0);
-    const currentConstituents = matchingItems.flatMap(item => item.constituents || []);
-    
+    const constituents = matchingItems.flatMap(item => item.constituents || []);
     const currentPercentage = totalCurrentValue > 0 ? (currentValue / totalCurrentValue) * 100 : 0;
     const idealPercentage = effectiveIdeal[categoryStr] || 0;
     
-    if (subName) {
-      // It's a sub-category
-      groupedAnalysis[parentName].subCategories.push({
-        category: subName,
-        currentValue,
-        currentPercentage,
-        idealPercentage,
-        diffPercentage: currentPercentage - idealPercentage,
-        diffValue: ((currentPercentage - idealPercentage) / 100) * totalCurrentValue,
-        constituents: currentConstituents
-      });
-      // Add to parent totals
-      groupedAnalysis[parentName].currentValue += currentValue;
-      groupedAnalysis[parentName].currentPercentage += currentPercentage;
-      
-      // If parent didn't have an explicit ideal percentage, accumulate from children
-      if (!(consolidatedAllocation[parentName] > 0)) {
-        groupedAnalysis[parentName].idealPercentage += idealPercentage;
-      }
-    } else {
-      // It's a parent category (or a standalone category without >)
-      groupedAnalysis[parentName].currentValue += currentValue;
-      groupedAnalysis[parentName].currentPercentage += currentPercentage;
-      
-      if (currentConstituents.length > 0) {
-        groupedAnalysis[parentName].constituents.push(...currentConstituents);
+    nodeMap[categoryStr] = {
+      category: localName,
+      fullPath: categoryStr,
+      currentValue,
+      currentPercentage,
+      idealPercentage,
+      constituents,
+      subCategories: []
+    };
+  });
+
+  // Link parents and children, roll up values bottom-up
+  const reversedCategories = [...allCategories].sort((a, b) => b.split('>').length - a.split('>').length);
+  reversedCategories.forEach(categoryStr => {
+    const node = nodeMap[categoryStr];
+    const parts = categoryStr.split(' > ');
+    
+    if (parts.length > 1) {
+      const parentPath = parts.slice(0, -1).join(' > ');
+      if (nodeMap[parentPath]) {
+        nodeMap[parentPath].subCategories.push(node);
+        
+        nodeMap[parentPath].currentValue += node.currentValue;
+        nodeMap[parentPath].currentPercentage += node.currentPercentage;
+        
+        if (!(consolidatedAllocation[parentPath] > 0)) {
+          nodeMap[parentPath].idealPercentage += node.idealPercentage;
+        }
       }
     }
   });
 
-  // Convert map to sorted array
-  const allocationAnalysisTemp = Object.values(groupedAnalysis).map(item => {
-    item.diffPercentage = item.currentPercentage - item.idealPercentage;
-    item.diffValue = (item.diffPercentage / 100) * totalCurrentValue;
-    return item;
-  }).sort((a, b) => b.currentValue - a.currentValue);
+  // Finalize diffs and extract root nodes
+  const rootNodes: any[] = [];
+  allCategories.forEach(categoryStr => {
+    const node = nodeMap[categoryStr];
+    node.diffPercentage = node.currentPercentage - node.idealPercentage;
+    node.diffValue = (node.diffPercentage / 100) * totalCurrentValue;
+    
+    if (node.subCategories.length > 0) {
+      node.subCategories.sort((a: any, b: any) => b.currentValue - a.currentValue);
+    }
+    
+    if (categoryStr.split(' > ').length === 1) {
+      rootNodes.push(node);
+    }
+  });
 
+  const allocationAnalysisTemp = rootNodes.sort((a, b) => b.currentValue - a.currentValue);
 
-  const domesticEquity = allocationAnalysisTemp.find(a => a.category === 'Domestic Equity');
-  const globalEquity = allocationAnalysisTemp.find(a => a.category === 'Global Equity');
-  
   const allocationAnalysis = allocationAnalysisTemp;
 
 
