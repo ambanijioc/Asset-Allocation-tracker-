@@ -134,9 +134,32 @@ export function usePortfolioCalculations({
         
         const assetNameLower = String(asset.name || '').toLowerCase();
         const isGlobalFund = assetNameLower.includes('off-shore') || assetNameLower.includes('china') || assetNameLower.includes('global') || assetNameLower.includes('international') || assetNameLower.includes('nasdaq') || assetNameLower.includes('s&p') || assetNameLower.includes('us equity');
-        const equityCategory = isGlobalFund ? 'Equities > Global Equity' : 'Equities > Domestic Equity';
+        
+        if (isGlobalFund) {
+          addValue('Equities > Global Equity', alloc.stockPosition || 0);
+        } else {
+          const mcapWeightage = fundHoldings[asset.symbol]?.marketCapWeightage;
+          const large = Number(mcapWeightage?.largeCap) || 0;
+          const mid = Number(mcapWeightage?.midCap) || 0;
+          const small = Number(mcapWeightage?.smallCap) || 0;
+          const others = Number(mcapWeightage?.others) || 0;
+          const totalWeight = large + mid + small + others;
 
-        addValue(equityCategory, alloc.stockPosition || 0);
+          if (totalWeight > 0) {
+            const stockPos = alloc.stockPosition || 0;
+            addValue('Equities > Domestic Equity > Large Cap', stockPos * (large / totalWeight));
+            addValue('Equities > Domestic Equity > Mid Cap', stockPos * (mid / totalWeight));
+            addValue('Equities > Domestic Equity > Small Cap', stockPos * (small / totalWeight));
+            if (others > 0) addValue('Equities > Domestic Equity', stockPos * (others / totalWeight));
+          } else {
+            const cap = getCapCategory(asset.name, fundHoldings[asset.symbol]?.categoryName);
+            if (cap === 'Large Cap' || cap === 'Mid Cap' || cap === 'Small Cap') {
+              addValue('Equities > Domestic Equity > ' + cap, alloc.stockPosition || 0);
+            } else {
+              addValue('Equities > Domestic Equity', alloc.stockPosition || 0);
+            }
+          }
+        }
         addValue('Fixed Income', alloc.bondPosition || 0);
         addValue('Cash', alloc.cashPosition || 0);
         addValue('Other', (alloc.otherPosition || 0) + (alloc.preferredPosition || 0) + (alloc.convertiblePosition || 0));
@@ -152,7 +175,16 @@ export function usePortfolioCalculations({
 
     let finalCategory = topCategory;
     if (finalCategory === 'Equities') {
-      finalCategory = isDomestic(asset) ? 'Equities > Domestic Equity' : 'Equities > Global Equity';
+      if (isDomestic(asset)) {
+        const cap = getCapCategory(asset.name || asset.symbol);
+        if (cap === 'Large Cap' || cap === 'Mid Cap' || cap === 'Small Cap') {
+          finalCategory = 'Equities > Domestic Equity > ' + cap;
+        } else {
+          finalCategory = 'Equities > Domestic Equity';
+        }
+      } else {
+        finalCategory = 'Equities > Global Equity';
+      }
     }
     
     if (finalCategory === 'Mutual Funds') {
@@ -162,7 +194,16 @@ export function usePortfolioCalculations({
       } else {
         const assetName = String(asset.name || '').toLowerCase();
         const isGlobalFund = assetName.includes('off-shore') || assetName.includes('china') || assetName.includes('global') || assetName.includes('international');
-        finalCategory = isGlobalFund ? 'Equities > Global Equity' : 'Equities > Domestic Equity';
+        if (isGlobalFund) {
+          finalCategory = 'Equities > Global Equity';
+        } else {
+          const cap = getCapCategory(asset.name, fundHoldings[asset.symbol]?.categoryName);
+          if (cap === 'Large Cap' || cap === 'Mid Cap' || cap === 'Small Cap') {
+            finalCategory = 'Equities > Domestic Equity > ' + cap;
+          } else {
+            finalCategory = 'Equities > Domestic Equity';
+          }
+        }
       }
     } else if (finalCategory === 'Commodities') {
       finalCategory = 'Commodities > ' + getCommoditySubCategory(asset);
