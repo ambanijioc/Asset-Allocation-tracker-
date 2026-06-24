@@ -46,7 +46,7 @@ const TreeNode = ({ nodeKey, node, idealAllocation, consolidatedAllocation, hand
       setIsAdding(false);
       return;
     }
-    const newPath = `${path} > ${newSubName.trim()}`;
+    const newPath = normalizeGroup(`${path} > ${newSubName.trim()}`);
     handleAllocationChange(newPath, 0); // Initialize with 0%
     setNewSubName('');
     setIsAdding(false);
@@ -169,7 +169,13 @@ export default function AllocationSettingsModal({
   const tree = useMemo(() => buildTree(allCategories), [allCategories]);
 
   const handleAllocationChange = (category: string, value: any) => {
-    const updated = { ...idealAllocation, [category]: value };
+    const normalized = normalizeGroup(category);
+    const updated = { ...idealAllocation };
+    // Remove old key if casing changed
+    if (category !== normalized && updated[category] !== undefined) {
+      delete updated[category];
+    }
+    updated[normalized] = value;
     setIdealAllocation(updated);
   };
 
@@ -185,7 +191,14 @@ export default function AllocationSettingsModal({
   };
 
   const handleSave = () => {
-    syncToDb({ settings: { idealAllocation } });
+    // Normalize all keys before saving to ensure consistent casing
+    const normalized: Record<string, number> = {};
+    for (const [key, val] of Object.entries(idealAllocation)) {
+      const normKey = normalizeGroup(key);
+      normalized[normKey] = (normalized[normKey] || 0) + (Number(val) || 0);
+    }
+    setIdealAllocation(normalized);
+    syncToDb({ settings: { idealAllocation: normalized } });
     setIsAllocationSettingsOpen(false);
   };
 

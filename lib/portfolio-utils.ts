@@ -69,10 +69,30 @@ export const getCapCategory = (name: string, categoryName?: string) => {
   return null;
 };
 
+const KNOWN_CASINGS: Record<string, string> = {
+  'equities': 'Equities',
+  'domestic equity': 'Domestic Equity',
+  'global equity': 'Global Equity',
+  'fixed income': 'Fixed Income',
+  'cash': 'Cash',
+  'commodities': 'Commodities',
+  'gold': 'Gold',
+  'silver': 'Silver',
+  'crypto': 'Crypto',
+  'large cap': 'Large Cap',
+  'mid cap': 'Mid Cap',
+  'small cap': 'Small Cap',
+  'mutual funds': 'Mutual Funds',
+  'etfs': 'ETFs',
+  'other / uncategorized': 'Other / Uncategorized'
+};
+
 export const normalizeGroup = (cat: string) => {
-  // We now fully support N-level hierarchy, so we preserve the full path.
-  // Legacy cleanup for trailing spaces just in case:
-  return cat.trim();
+  if (!cat) return '';
+  return cat.split('>').map(part => {
+    const trimmed = part.trim();
+    return KNOWN_CASINGS[trimmed.toLowerCase()] || trimmed;
+  }).join(' > ');
 };
 
 export const formatCompact = (val: number) => {
