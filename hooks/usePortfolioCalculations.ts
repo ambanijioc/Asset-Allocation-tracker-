@@ -176,7 +176,17 @@ export function usePortfolioCalculations({
     let finalCategory = topCategory;
     if (finalCategory === 'Equities') {
       if (isDomestic(asset)) {
-        const cap = getCapCategory(asset.name || asset.symbol);
+        // Use real-time market cap data (same thresholds as Market Cap chart)
+        let cap: string | null = null;
+        if (priceData?.marketCap) {
+          const capInUsd = currentCurrency === 'INR' ? priceData.marketCap / usdToInr : priceData.marketCap;
+          if (capInUsd >= 10_000_000_000) cap = 'Large Cap';
+          else if (capInUsd >= 2_000_000_000) cap = 'Mid Cap';
+          else cap = 'Small Cap';
+        } else {
+          // Fallback to name-matching if no market cap data
+          cap = getCapCategory(asset.name || asset.symbol);
+        }
         if (cap === 'Large Cap' || cap === 'Mid Cap' || cap === 'Small Cap') {
           finalCategory = 'Equities > Domestic Equity > ' + cap;
         } else {

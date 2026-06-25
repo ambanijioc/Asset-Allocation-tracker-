@@ -364,46 +364,54 @@ export default function Dashboard() {
         try {
           data = JSON.parse(text);
         } catch (e) {
-          throw new Error('API returned invalid JSON (HTML error page)');
+          console.warn(`${exchangeName}: API returned invalid JSON (HTML error page)`);
+          setStatus({ state: 'error', error: 'API returned invalid JSON' });
+          return;
         }
 
-        if (data && data.error) throw new Error(data.error);
+        if (data && data.error) {
+          console.warn(`${exchangeName}: ${data.error}`);
+          setStatus({ state: 'error', error: data.error });
+          return;
+        }
 
-        if (Array.isArray(data)) {
-          const mapped = data.map((a: any) => ({
-            ...a,
-            id: `${exchangeName.toLowerCase()}-${a.name}`,
-            entryPrice: 0,
-            currency: 'USD'
-          }));
-          setter(mapped);
-          setStatus({ state: 'connected', lastSynced: Date.now() });
-          
-          // Background sync to Firebase
-          syncToDb({ [`cachedCrypto.${exchangeName.toLowerCase()}`]: { lastSynced: Date.now(), assets: mapped } });
+        if (!Array.isArray(data)) {
+          console.warn(`${exchangeName}: Unknown response format`);
+          setStatus({ state: 'error', error: 'Unknown response format' });
+          return;
+        }
 
-          setPrices(prev => {
-            const newPrices = { ...prev };
-            data.forEach((crypto: any) => {
-              if (crypto.currentPrice) {
-                newPrices[crypto.symbol] = {
-                  symbol: crypto.symbol,
-                  regularMarketPrice: crypto.currentPrice,
-                  currency: 'USD',
-                  shortName: crypto.name,
-                  quoteType: 'CRYPTO',
-                  source: `${exchangeName} API`,
-                  lastUpdated: Date.now()
-                };
-              }
-            });
-            return newPrices;
+        const mapped = data.map((a: any) => ({
+          ...a,
+          id: `${exchangeName.toLowerCase()}-${a.name}`,
+          entryPrice: 0,
+          currency: 'USD'
+        }));
+        setter(mapped);
+        setStatus({ state: 'connected', lastSynced: Date.now() });
+        
+        // Background sync to Firebase
+        syncToDb({ [`cachedCrypto.${exchangeName.toLowerCase()}`]: { lastSynced: Date.now(), assets: mapped } });
+
+        setPrices(prev => {
+          const newPrices = { ...prev };
+          data.forEach((crypto: any) => {
+            if (crypto.currentPrice) {
+              newPrices[crypto.symbol] = {
+                symbol: crypto.symbol,
+                regularMarketPrice: crypto.currentPrice,
+                currency: 'USD',
+                shortName: crypto.name,
+                quoteType: 'CRYPTO',
+                source: `${exchangeName} API`,
+                lastUpdated: Date.now()
+              };
+            }
           });
-        } else {
-          throw new Error('Unknown response format');
-        }
+          return newPrices;
+        });
       } catch (err: any) {
-        console.error(`${exchangeName} fetch error:`, err);
+        console.warn(`${exchangeName} fetch failed:`, err.message);
         setStatus({ state: 'error', error: err.message });
       }
     };
