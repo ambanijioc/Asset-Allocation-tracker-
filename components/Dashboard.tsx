@@ -218,6 +218,86 @@ const RecursiveAllocationRow = ({ node, depth = 0, expandedCategories, setExpand
   );
 };
 
+const RecursiveLegendItem = ({ node, index, depth = 0, expandedCategories, setExpandedCategories, topLevelColor, totalValue }: any) => {
+  const isExpanded = expandedCategories[node.fullPath];
+  const percent = totalValue > 0 ? ((node.currentValue / totalValue) * 100).toFixed(1) : '0.0';
+  const hasSub = node.subCategories && node.subCategories.length > 0;
+  
+  return (
+    <div className={`flex flex-col ${depth === 0 ? 'gap-1.5 p-3 rounded-xl bg-zinc-50 dark:bg-zinc-800/50 border border-zinc-100 dark:border-zinc-800' : 'mt-1.5'}`}>
+      <div 
+        className={`flex items-center justify-between text-sm ${hasSub || (node.constituents && node.constituents.length > 0) ? 'cursor-pointer hover:opacity-80 transition-opacity' : ''} ${depth > 0 ? 'pt-1.5 border-t border-zinc-200/50 dark:border-zinc-700/50' : ''}`}
+        onClick={() => {
+          if (hasSub || (node.constituents && node.constituents.length > 0)) {
+            setExpandedCategories((prev: any) => ({ ...prev, [node.fullPath]: !prev[node.fullPath] }));
+          }
+        }}
+      >
+        <div className="flex items-center gap-2" style={{ paddingLeft: `${depth * 12}px` }}>
+          {depth === 0 ? (
+            <div className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: topLevelColor }} />
+          ) : (
+            <div className="w-3 flex justify-center shrink-0">
+               {hasSub || (node.constituents && node.constituents.length > 0) ? (isExpanded ? <ChevronDown className="w-3 h-3 text-zinc-400" /> : <ChevronRight className="w-3 h-3 text-zinc-400" />) : <div className="w-1.5 h-1.5 rounded-full bg-zinc-300 dark:bg-zinc-600" />}
+            </div>
+          )}
+          <span className={`${depth === 0 ? 'font-semibold' : 'font-medium'} text-zinc-900 dark:text-zinc-100`}>
+            {node.category}
+          </span>
+        </div>
+        <div className="font-bold text-zinc-900 dark:text-zinc-100 whitespace-nowrap pl-2">
+          ₹{node.currentValue.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+          <span className="text-zinc-400 ml-1.5 font-normal text-xs">
+            ({percent}%)
+          </span>
+        </div>
+      </div>
+
+      {depth === 0 && (
+        <div className="w-full h-1.5 bg-zinc-200 dark:bg-zinc-700 rounded-full overflow-hidden flex mt-1">
+          <div 
+            className="h-full transition-all duration-500 rounded-full" 
+            style={{ width: `${percent}%`, backgroundColor: topLevelColor }} 
+          />
+        </div>
+      )}
+      
+      {isExpanded && (
+        <div className="flex flex-col gap-1 mt-1">
+          {hasSub && [...node.subCategories].sort((a: any, b: any) => b.currentValue - a.currentValue).map((subNode: any, i: number) => (
+            <RecursiveLegendItem 
+              key={`legend-${subNode.fullPath}-${i}`}
+              node={subNode}
+              index={i}
+              depth={depth + 1}
+              expandedCategories={expandedCategories}
+              setExpandedCategories={setExpandedCategories}
+              topLevelColor={topLevelColor}
+              totalValue={totalValue}
+            />
+          ))}
+          {(!hasSub && node.constituents && node.constituents.length > 0) && (
+             <div className="mt-1 pt-1 border-t border-zinc-200/50 dark:border-zinc-700/50 flex flex-col gap-1.5">
+               {[...node.constituents].sort((a: any, b: any) => b.value - a.value).map((c: any, i: number) => {
+                 const cPercent = totalValue > 0 ? ((c.value / totalValue) * 100).toFixed(1) : '0.0';
+                 return (
+                   <div key={`const-${i}`} className="flex justify-between items-center text-xs text-zinc-600 dark:text-zinc-400" style={{ paddingLeft: `${(depth + 1) * 12 + 20}px` }}>
+                     <span className="truncate pr-2">{c.name}</span>
+                     <div className="flex items-center gap-2 shrink-0">
+                       <span>₹{c.value.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span>
+                       <span className="w-10 text-right opacity-70">{cPercent}%</span>
+                     </div>
+                   </div>
+                 );
+               })}
+             </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
 export default function Dashboard() {
   const [binanceAssets, setBinanceAssets] = useState<Asset[]>([]);
   const [coindcxAssets, setCoindcxAssets] = useState<Asset[]>([]);
@@ -977,7 +1057,7 @@ export default function Dashboard() {
                   <ResponsiveContainer width="100%" height="100%">
                     <PieChart>
                       <Pie
-                        data={allocationData}
+                        data={allocationAnalysis.map((node: any) => ({ name: node.category, value: node.currentValue }))}
                         cx="50%"
                         cy="50%"
                         innerRadius={60}
@@ -985,8 +1065,8 @@ export default function Dashboard() {
                         paddingAngle={5}
                         dataKey="value"
                       >
-                        {allocationData.map((entry, index) => (
-                          <Cell key={`cell-allocation-${entry.name}-${index}`} fill={COLORS[index % COLORS.length]} />
+                        {allocationAnalysis.map((entry: any, index: number) => (
+                          <Cell key={`cell-allocation-${entry.category}-${index}`} fill={COLORS[index % COLORS.length]} />
                         ))}
                       </Pie>
                       <RechartsTooltip 
@@ -997,55 +1077,18 @@ export default function Dashboard() {
                   </ResponsiveContainer>
                 </div>
                 <div className="mt-4 flex flex-col gap-3">
-                  {allocationData.map((entry, index) => {
-                    const total = allocationData.reduce((sum, item) => sum + item.value, 0);
-                    const percent = total > 0 ? ((entry.value / total) * 100).toFixed(1) : '0.0';
-                    const isExpanded = expandedCategories[entry.name];
-                    return (
-                      <div 
-                        key={`legend-allocation-${entry.name}-${index}`} 
-                        className="flex flex-col gap-1.5 p-3 rounded-xl bg-zinc-50 dark:bg-zinc-800/50 border border-zinc-100 dark:border-zinc-800 cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
-                        onClick={() => setExpandedCategories(prev => ({ ...prev, [entry.name]: !prev[entry.name] }))}
-                      >
-                        <div className="flex items-center justify-between text-sm">
-                          <div className="flex items-center gap-2">
-                            <div className="w-3 h-3 rounded-full" style={{ backgroundColor: COLORS[index % COLORS.length] }} />
-                            <span className="font-semibold text-zinc-900 dark:text-zinc-100">{entry.name}</span>
-                          </div>
-                          <div className="font-bold text-zinc-900 dark:text-zinc-100">
-                            ₹{entry.value.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
-                            <span className="text-zinc-400 ml-1.5 font-normal text-xs">
-                              ({percent}%)
-                            </span>
-                          </div>
-                        </div>
-
-                        <div className="w-full h-1.5 bg-zinc-200 dark:bg-zinc-700 rounded-full overflow-hidden flex">
-                          <div 
-                            className="h-full transition-all duration-500 rounded-full" 
-                            style={{ width: `${percent}%`, backgroundColor: COLORS[index % COLORS.length] }} 
-                          />
-                        </div>
-                        
-                        {isExpanded && entry.constituents && entry.constituents.length > 0 && (
-                          <div className="mt-2 pt-2 border-t border-zinc-200 dark:border-zinc-700 flex flex-col gap-1.5">
-                            {[...entry.constituents].sort((a: any, b: any) => b.value - a.value).map((c: any, i: number) => {
-                              const cPercent = entry.value > 0 ? ((c.value / entry.value) * 100).toFixed(1) : '0.0';
-                              return (
-                                <div key={`const-${i}`} className="flex justify-between items-center text-xs text-zinc-600 dark:text-zinc-400">
-                                  <span className="truncate max-w-[150px]">{c.name}</span>
-                                  <div className="flex items-center gap-2">
-                                    <span>₹{c.value.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span>
-                                    <span className="w-10 text-right opacity-70">{cPercent}%</span>
-                                  </div>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
+                  {allocationAnalysis.map((node: any, index: number) => (
+                    <RecursiveLegendItem 
+                      key={`legend-allocation-${node.fullPath}-${index}`}
+                      node={node}
+                      index={index}
+                      depth={0}
+                      expandedCategories={expandedCategories}
+                      setExpandedCategories={setExpandedCategories}
+                      topLevelColor={COLORS[index % COLORS.length]}
+                      totalValue={portfolioStats.currentValue}
+                    />
+                  ))}
                 </div>
                 <div className="mt-6 pt-4 border-t border-zinc-100 dark:border-zinc-800 flex items-center justify-between">
                   <span className="text-sm font-bold text-zinc-500 uppercase tracking-wider">Total Allocation Value</span>
