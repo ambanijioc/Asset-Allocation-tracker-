@@ -30,7 +30,7 @@ const buildTree = (categories: string[]) => {
   return root;
 };
 
-const TreeNode = ({ nodeKey, node, idealAllocation, consolidatedAllocation, handleAllocationChange, handleDeleteCategory, depth = 0 }: any) => {
+const TreeNode = ({ nodeKey, node, idealAllocation, consolidatedAllocation, handleAllocationChange, handleDeleteCategory, depth = 0, parentEffectivePercent = 100 }: any) => {
   const path = node._path;
   const childrenKeys = Object.keys(node._children);
   const hasChildren = childrenKeys.length > 0;
@@ -39,6 +39,9 @@ const TreeNode = ({ nodeKey, node, idealAllocation, consolidatedAllocation, hand
   // New state for adding sub-categories
   const [isAdding, setIsAdding] = useState(false);
   const [newSubName, setNewSubName] = useState('');
+  
+  // New state for input mode (relative vs absolute)
+  const [absMode, setAbsMode] = useState(false);
 
   const handleAddSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -53,21 +56,31 @@ const TreeNode = ({ nodeKey, node, idealAllocation, consolidatedAllocation, hand
     setIsExpanded(true); // Auto expand to show the new child
   };
 
-  const childrenSum = childrenKeys.reduce((sum, k) => {
+  const rawStoredVal = idealAllocation[path] !== undefined ? idealAllocation[path] : (consolidatedAllocation[path] || 0);
+  const myStoredVal = Number(rawStoredVal) || 0;
+  const myEffectivePercent = depth === 0 ? myStoredVal : (myStoredVal * parentEffectivePercent) / 100;
+  
+  const displayValueStr = rawStoredVal === '' ? '' : (
+    absMode && depth > 0 ? Number(myEffectivePercent.toFixed(4)) : rawStoredVal
+  );
+
+  const childrenSumRelative = childrenKeys.reduce((sum, k) => {
     const childPath = node._children[k]._path;
     const val = idealAllocation[childPath] !== undefined ? idealAllocation[childPath] : (consolidatedAllocation[childPath] || 0);
     return sum + (Number(val) || 0);
   }, 0);
+  
+  const childrenSumAbsolute = depth === 0 ? childrenSumRelative : (childrenSumRelative * myEffectivePercent) / 100;
 
   const paddingLeft = depth * 1.5;
 
   return (
     <div className="flex flex-col mb-2">
       <div 
-        className={`flex items-center justify-between p-2 rounded-lg ${depth === 0 ? 'bg-zinc-100 dark:bg-zinc-800/80 font-semibold' : 'hover:bg-zinc-50 dark:hover:bg-zinc-800/30'}`}
+        className={`flex items-start justify-between p-2 rounded-lg ${depth === 0 ? 'bg-zinc-100 dark:bg-zinc-800/80 font-semibold' : 'hover:bg-zinc-50 dark:hover:bg-zinc-800/30'}`}
         style={{ marginLeft: `${paddingLeft}rem` }}
       >
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 mt-1">
           {hasChildren ? (
             <button onClick={() => setIsExpanded(!isExpanded)} className="text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300">
               {isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
@@ -79,26 +92,63 @@ const TreeNode = ({ nodeKey, node, idealAllocation, consolidatedAllocation, hand
             {nodeKey}
           </span>
         </div>
-        <div className="flex items-center gap-2">
-          <input
-            type="number"
-            value={idealAllocation[path] !== undefined ? idealAllocation[path] : (consolidatedAllocation[path] || '')}
-            onChange={(e) => {
-              const val = e.target.value;
-              handleAllocationChange(path, val === '' ? '' : parseFloat(val));
-            }}
-            className={`w-20 px-2 py-1 text-sm border rounded bg-white dark:bg-zinc-900 ${depth === 0 ? 'border-zinc-300 dark:border-zinc-600 font-semibold' : 'border-zinc-200 dark:border-zinc-700 text-zinc-600 dark:text-zinc-400 focus:border-blue-500'} focus:outline-none text-right`}
-            placeholder="0"
-          />
-          <span className="text-sm text-zinc-500 dark:text-zinc-400 w-4">%</span>
+        <div className="flex flex-col items-end gap-1">
+          <div className="flex items-center gap-1">
+            <input
+              type="number"
+              value={displayValueStr}
+              onChange={(e) => {
+                const valStr = e.target.value;
+                if (valStr === '') {
+                  handleAllocationChange(path, '');
+                  return;
+                }
+                const val = parseFloat(valStr);
+                if (depth === 0 || !absMode) {
+                  handleAllocationChange(path, val);
+                } else {
+                  if (parentEffectivePercent > 0) {
+                    const relativeVal = (val / parentEffectivePercent) * 100;
+                    handleAllocationChange(path, Number(relativeVal.toFixed(4)));
+                  } else {
+                    handleAllocationChange(path, 0);
+                  }
+                }
+              }}
+              className={`w-20 px-2 py-1 text-sm border rounded bg-white dark:bg-zinc-900 ${depth === 0 ? 'border-zinc-300 dark:border-zinc-600 font-semibold' : 'border-zinc-200 dark:border-zinc-700 text-zinc-600 dark:text-zinc-400 focus:border-blue-500'} focus:outline-none text-right`}
+              placeholder="0"
+            />
+            {depth > 0 ? (
+              <button 
+                onClick={() => { if (parentEffectivePercent > 0) setAbsMode(!absMode) }}
+                className="text-[11px] text-blue-500 hover:text-blue-600 font-medium px-1.5 py-1 rounded cursor-pointer transition-colors bg-blue-50 dark:bg-blue-900/30 w-[84px] text-left"
+                title="Click to toggle input mode"
+              >
+                % {absMode ? 'of total' : 'of parent'}
+              </button>
+            ) : (
+              <span className="text-sm text-zinc-500 dark:text-zinc-400 w-[84px] ml-1">%</span>
+            )}
+            
+            {depth > 0 ? (
+              <button 
+                onClick={() => handleDeleteCategory(path)}
+                className="ml-1 text-zinc-400 hover:text-red-500 transition-colors"
+                title="Delete sub-category"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
+            ) : (
+              <div className="w-5 ml-1" />
+            )}
+          </div>
           {depth > 0 && (
-            <button 
-              onClick={() => handleDeleteCategory(path)}
-              className="ml-2 text-zinc-400 hover:text-red-500 transition-colors"
-              title="Delete sub-category"
+            <div 
+              className="text-[10px] text-zinc-400 dark:text-zinc-500 cursor-pointer hover:text-zinc-500 dark:hover:text-zinc-400 transition-colors pr-7" 
+              onClick={() => { if(parentEffectivePercent > 0) setAbsMode(!absMode); }}
             >
-              <Trash2 className="w-4 h-4" />
-            </button>
+              ≈ {absMode ? `${Number(myStoredVal.toFixed(2))}% of parent` : `${Number(myEffectivePercent.toFixed(2))}% of total`}
+            </div>
           )}
         </div>
       </div>
@@ -115,6 +165,7 @@ const TreeNode = ({ nodeKey, node, idealAllocation, consolidatedAllocation, hand
               handleAllocationChange={handleAllocationChange}
               handleDeleteCategory={handleDeleteCategory} 
               depth={depth + 1} 
+              parentEffectivePercent={myEffectivePercent}
             />
           ))}
           
@@ -145,8 +196,10 @@ const TreeNode = ({ nodeKey, node, idealAllocation, consolidatedAllocation, hand
               style={{ marginLeft: `${paddingLeft + 1.5}rem` }}
             >
               <span className="text-zinc-500">Sub-categories sum:</span>
-              <span className={`font-semibold ${childrenSum === 100 ? 'text-emerald-500' : 'text-red-500'}`}>
-                {childrenSum}% {childrenSum !== 100 && '(Should be 100%)'}
+              <span className={`font-semibold flex items-center gap-1.5 ${childrenSumRelative === 100 ? 'text-emerald-500' : 'text-red-500'}`}>
+                {childrenSumRelative}%
+                {depth > 0 && <span className="text-zinc-400 font-normal">(≈ {Number(childrenSumAbsolute.toFixed(1))}% of total)</span>}
+                {childrenSumRelative !== 100 && ' (Should be 100%)'}
               </span>
             </div>
           )}
@@ -226,7 +279,7 @@ export default function AllocationSettingsModal({
         
         <div className="p-5 overflow-y-auto flex-1 bg-white dark:bg-zinc-950">
           <p className="text-xs text-zinc-500 dark:text-zinc-400 mb-5 leading-relaxed bg-blue-50 dark:bg-blue-900/20 p-3 rounded-lg border border-blue-100 dark:border-blue-800/30">
-            Set your target percentages hierarchically. Root categories (like Equities) represent a % of your <strong>total portfolio</strong>. Sub-categories represent a % of their <strong>parent bucket</strong>.
+            Set your target percentages hierarchically. Root categories (like Equities) represent a % of your <strong>total portfolio</strong>. For sub-categories, click the <strong>% of parent</strong> button to toggle and input them as a % of the total portfolio instead.
           </p>
           
           <div className="space-y-2">
@@ -239,6 +292,7 @@ export default function AllocationSettingsModal({
                 consolidatedAllocation={consolidatedAllocation} 
                 handleAllocationChange={handleAllocationChange}
                 handleDeleteCategory={handleDeleteCategory}
+                parentEffectivePercent={100}
               />
             ))}
           </div>
