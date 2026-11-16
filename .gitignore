@@ -5,8 +5,17 @@ coverage/
 *.log
 .env*
 !.env.example
+!.env.logs.example
+
+# Build artifacts
+tsconfig.tsbuildinfo
 
 # Dev tools / agent state
 .omo/
 .claude/
 bun.lock
+
+# Local notes / one-off scripts (may contain credentials)
+plan/
+patch_*.js
+*.pid
