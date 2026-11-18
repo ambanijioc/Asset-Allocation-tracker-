@@ -204,6 +204,8 @@ interface RawFundData {
     smallCap?: number | string | null;
     others?: number | string | null;
   } | null;
+  lookthrough?: string | null;
+  note?: string | null;
   debug?: string;
   error?: string;
 }
@@ -259,6 +261,8 @@ function normalizeFundData(raw: RawFundData, fallbackSymbol: string): FundData {
     sectorWeightings,
     assetAllocation,
     marketCapWeightage,
+    lookthrough: raw.lookthrough ?? null,
+    note: raw.note ?? null,
     debug: raw.debug,
   };
 }

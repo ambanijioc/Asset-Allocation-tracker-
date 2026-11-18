@@ -56,12 +56,14 @@ app/                      routes only
   (tabs)/                 Dashboard · Insights · Allocation · Assets · Screener · Settings
   asset/new.tsx           add holding (modal)
   asset/[id]/             detail + edit (modal)
+  assistant.tsx           read-only AI chat (modal)
   login.tsx               email/password, Google + demo entry
 src/
   components/ui/          design-system primitives
   components/charts/      SVG visualisations
   components/portfolio/   composed portfolio widgets
   components/portfolio/insights/  exposure, fund, matrix and drift panels
+  features/assistant/     chat loop + portfolio tool executors
   features/auth/          Firebase + session provider
   features/portfolio/     types, API, queries, aggregation, form, analytics
   lib/api/                typed fetch client with timeouts
@@ -95,6 +97,37 @@ using the saved ideal allocation or the default 60/20/5/5/10 policy.
 Fund data cached on the user snapshot is used first. Missing schemes are fetched
 lazily from `/api/holdings` and cached in TanStack Query for a day. The bundled
 demo portfolio ships with sample scheme holdings so every chart renders offline.
+
+### AI assistant
+
+The **Assistant** modal (opened from the dashboard header or the "Ask the
+assistant" card) runs a tool-calling loop against the backend proxy at
+`/api/agent`:
+
+1. the app sends the conversation and its Firebase ID token;
+2. the server verifies the token, adds the Groq key and the tool schemas;
+3. the model asks for portfolio data (`get_portfolio_summary`,
+   `get_exposure_summary`, `search_asset`, `get_quote`,
+   `get_fund_holdings`);
+4. the app executes each lookup against the portfolio already in memory and the
+   existing `/api/search`, `/api/price` and `/api/holdings` endpoints;
+5. the results go back to the model until it produces a final answer.
+
+The assistant is deliberately **read-only**. It cannot add, edit or delete
+assets, and it never forces a price refresh (which would write to the Google
+Sheet). Write tools should be added behind an explicit confirmation sheet.
+
+The model key lives on the server, never in the app:
+
+```bash
+# web repo .env.local
+GROQ_API_KEY=gsk_...
+FIREBASE_PROJECT_ID=liquid-muse-491818-a9
+```
+
+`lib/firebase-auth.ts` verifies Firebase RS256 ID tokens against Google's
+public keys, so the proxy cannot be used anonymously in production. Local
+`next dev` allows tokenless requests for testing.
 
 ### Auth and demo mode
 
@@ -150,7 +183,7 @@ npm run lint        # eslint-config-expo
 npm run doctor      # expo-doctor
 ```
 
-> **Backend note:** `/api/sync` currently trusts a client-supplied `uid`. Before
-> distributing this app publicly, verify a Firebase ID token server-side and use
-> the decoded `uid`. The mobile client is ready to send `Authorization: Bearer`
-> headers through the shared API client.
+> **Backend note:** `/api/sync` still trusts a client-supplied `uid`. Before
+> distributing this app publicly, apply the same Firebase ID-token check used by
+> `/api/agent` and write the decoded `uid` instead. The mobile client already
+> sends `Authorization: Bearer` headers through the shared API client.

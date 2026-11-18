@@ -101,6 +101,9 @@ export type FundData = {
   sectorWeightings?: FundSectorWeighting[];
   assetAllocation?: FundAssetAllocation | null;
   marketCapWeightage?: FundMarketCapWeightage | null;
+  /** `tracked-index` for ETF index look-through, `proxy-fund` for same-index funds. */
+  lookthrough?: string | null;
+  note?: string | null;
   debug?: string;
 };
 

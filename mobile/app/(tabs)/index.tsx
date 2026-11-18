@@ -81,7 +81,18 @@ export default function DashboardScreen() {
         subtitle={isDemo ? 'Demo portfolio · read-only' : 'Your portfolio at a glance'}
         size="large"
         action={
-          <IconButton icon="refresh-cw" onPress={refetch} accessibilityLabel="Refresh portfolio" />
+          <View style={styles.headerActions}>
+            <IconButton
+              icon="message-circle"
+              onPress={() => router.push('/assistant')}
+              accessibilityLabel="Open the AI assistant"
+            />
+            <IconButton
+              icon="refresh-cw"
+              onPress={refetch}
+              accessibilityLabel="Refresh portfolio"
+            />
+          </View>
         }
       />
 
@@ -192,6 +203,23 @@ export default function DashboardScreen() {
               <Feather name="arrow-up-right" size={18} color={colors.muted} />
             </Card>
 
+            <Card
+              onPress={() => router.push('/assistant')}
+              accessibilityLabel="Ask the AI assistant about your portfolio"
+              style={styles.insightCta}
+            >
+              <View style={[styles.insightIcon, { backgroundColor: colors.accentSoft }]}>
+                <Feather name="message-circle" size={18} color={colors.accent} />
+              </View>
+              <View style={styles.insightText}>
+                <Text style={[type.title, { color: colors.text }]}>Ask the assistant</Text>
+                <Text style={[type.caption, { color: colors.muted, marginTop: 2 }]}>
+                  Questions about your holdings, sectors or any stock. Read-only.
+                </Text>
+              </View>
+              <Feather name="arrow-up-right" size={18} color={colors.muted} />
+            </Card>
+
             <View>
               <SectionHeader
                 title="Top holdings"
@@ -254,6 +282,7 @@ function DashboardSkeleton() {
 
 const styles = StyleSheet.create({
   stack: { gap: space.xl },
+  headerActions: { flexDirection: 'row', gap: space.sm },
   allocationCard: { gap: space.xl },
   donutWrap: { alignItems: 'center' },
   donutValue: { fontSize: 17, fontWeight: '600', marginTop: 2 },

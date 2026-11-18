@@ -79,6 +79,10 @@ function RootNavigator() {
           options={{ presentation: 'modal', animation: 'slide_from_bottom' }}
         />
         <Stack.Screen
+          name="assistant"
+          options={{ presentation: 'modal', animation: 'slide_from_bottom' }}
+        />
+        <Stack.Screen
           name="asset/new"
           options={{ presentation: 'modal', animation: 'slide_from_bottom' }}
         />
