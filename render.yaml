@@ -14,3 +14,7 @@ services:
         sync: false
       - key: NEXT_PUBLIC_GEMINI_API_KEY
         sync: false
+      # Optional shared Groq key pool (comma-separated). Users can also add
+      # their own keys in Settings → AI assistant.
+      - key: GROQ_API_KEYS
+        sync: false
