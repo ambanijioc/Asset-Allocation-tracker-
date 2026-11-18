@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef, Fragment, useMemo } from 'react';
-import { Plus, Search, Trash2, RefreshCw, TrendingUp, TrendingDown, DollarSign, PieChart as PieChartIcon, BarChart3, List, MessageCircle, Settings, Target, X, Send, Bot, ArrowUp, ArrowDown, ArrowUpDown, MessageSquarePlus, ChevronUp, ChevronDown, ChevronRight, Pencil, Info, LogOut, Filter, Briefcase, Layers, Activity } from 'lucide-react';
+import { Plus, Search, Trash2, RefreshCw, TrendingUp, TrendingDown, PieChart as PieChartIcon, BarChart3, List, Settings, Target, X, Send, Bot, ArrowUp, ArrowDown, ArrowUpDown, MessageSquarePlus, ChevronUp, ChevronDown, ChevronRight, Pencil, Info, LogOut, Filter, Briefcase, Layers, Activity, LayoutDashboard, Menu, Wallet } from 'lucide-react';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RechartsTooltip, Legend, Treemap, BarChart, Bar, XAxis, YAxis, CartesianGrid } from 'recharts';
 import { v4 as uuidv4 } from 'uuid';
 import { GoogleGenAI, Type, ThinkingLevel } from '@google/genai';
@@ -19,7 +19,7 @@ import DeleteConfirmModal from '@/components/modals/DeleteConfirmModal';
 
 import { Asset, PriceData, ChatMessage } from '@/lib/types';
 import { COLORS } from '@/lib/constants';
-import { guessCurrency, getConvertedPrice, normalizeCategory, getCommoditySubCategory, getCapCategory, normalizeGroup, formatCompact, getBaseCryptoSymbol, isSameCrypto } from '@/lib/portfolio-utils';
+import { guessCurrency, getConvertedPrice, normalizeCategory, getCommoditySubCategory, getCapCategory, normalizeGroup, formatCompact, getBaseCryptoSymbol, isSameCrypto, normalizeExchangeAsset } from '@/lib/portfolio-utils';
 import { calculateTax, formatHoldingPeriod } from '@/lib/tax-utils';
 import { useAuth } from '@/hooks/useAuth';
 import { usePrices } from '@/hooks/usePrices';
@@ -74,7 +74,7 @@ const CustomTreemapContent = (props: any) => {
           y={y + height / 2}
           textAnchor="middle"
           fill={baseColor}
-          className="font-bold text-[12px] uppercase tracking-widest opacity-40"
+          className="font-bold text-[12px] uppercase tracking-wider opacity-40"
           style={{ pointerEvents: 'none' }}
         >
           {name}
@@ -132,6 +132,29 @@ const PriceStatusIndicator = ({ lastUpdated, isFetching, symbol }: { lastUpdated
   );
 };
 
+/** Build price rows from an exchange response or a cached exchange snapshot. */
+const exchangePrices = (
+  assets: Asset[],
+  lastUpdated: number,
+  source: string,
+): Record<string, PriceData> => {
+  const quotes: Record<string, PriceData> = {};
+  assets.forEach((asset) => {
+    const price = Number(asset.currentPrice);
+    if (!Number.isFinite(price) || price <= 0) return;
+    quotes[asset.symbol] = {
+      symbol: asset.symbol,
+      regularMarketPrice: price,
+      currency: asset.currency || 'USD',
+      shortName: asset.name,
+      quoteType: asset.type === 'CASH' ? 'CASH' : 'CRYPTO',
+      source,
+      lastUpdated,
+    };
+  });
+  return quotes;
+};
+
 const RecursiveAllocationRow = ({ node, depth = 0, expandedCategories, setExpandedCategories }: any) => {
   const isExpanded = expandedCategories[node.fullPath];
   const hasChildren = node.subCategories && node.subCategories.length > 0;
@@ -168,13 +191,13 @@ const RecursiveAllocationRow = ({ node, depth = 0, expandedCategories, setExpand
             </div>
           )}
         </td>
-        <td className={`px-6 py-4 text-right ${depth > 0 ? 'text-zinc-600 dark:text-zinc-400' : ''}`}>₹{node.currentValue.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</td>
-        <td className={`px-6 py-4 text-right ${depth > 0 ? 'text-zinc-600 dark:text-zinc-400' : ''}`}>{node.currentPercentage.toFixed(1)}%</td>
-        <td className={`px-6 py-4 text-right ${depth > 0 ? 'text-zinc-600 dark:text-zinc-400' : ''}`}>{node.idealPercentage.toFixed(1)}%</td>
-        <td className={`px-6 py-4 text-right font-medium ${node.diffPercentage > 1 ? 'text-red-500' : node.diffPercentage < -1 ? 'text-blue-500' : 'text-emerald-500'}`}>
+        <td className={`px-5 py-3.5 text-right ${depth > 0 ? 'text-zinc-600 dark:text-zinc-400' : ''}`}>₹{node.currentValue.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</td>
+        <td className={`px-5 py-3.5 text-right ${depth > 0 ? 'text-zinc-600 dark:text-zinc-400' : ''}`}>{node.currentPercentage.toFixed(1)}%</td>
+        <td className={`px-5 py-3.5 text-right ${depth > 0 ? 'text-zinc-600 dark:text-zinc-400' : ''}`}>{node.idealPercentage.toFixed(1)}%</td>
+        <td className={`px-5 py-3.5 text-right font-medium ${node.diffPercentage > 1 ? 'text-red-500' : node.diffPercentage < -1 ? 'text-blue-500' : 'text-emerald-500'}`}>
           {node.diffPercentage > 0 ? '+' : ''}{node.diffPercentage.toFixed(1)}%
         </td>
-        <td className="px-6 py-4 text-right">
+        <td className="px-5 py-3.5 text-right">
           {node.diffPercentage > 2 ? (
             <span className="text-red-500 font-medium">Reduce by ₹{Math.abs(node.diffValue).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</span>
           ) : node.diffPercentage < -2 ? (
@@ -197,7 +220,7 @@ const RecursiveAllocationRow = ({ node, depth = 0, expandedCategories, setExpand
 
       {isExpanded && !hasChildren && hasConstituents && (
         <tr className="bg-zinc-50/50 dark:bg-zinc-900/20">
-          <td colSpan={6} className="px-6 py-4">
+          <td colSpan={6} className="px-5 py-3.5">
             <div className={`${plBorderClass} border-l-2 border-zinc-200 dark:border-zinc-700 space-y-2`}>
               {node.constituents.map((constituent: any, cIdx: number) => (
                 <div key={`${constituent.symbol || constituent.name}-${cIdx}`} className="flex justify-between text-sm">
@@ -305,6 +328,7 @@ export default function Dashboard() {
   const [coindcxStatus, setCoindcxStatus] = useState<{ state: 'connecting' | 'connected' | 'error' | 'cached', lastSynced?: number, error?: string }>({ state: 'connecting' });
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<'portfolio' | 'screener'>('portfolio');
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isAllocationSettingsOpen, setIsAllocationSettingsOpen] = useState(false);
   const [expandedCategories, setExpandedCategories] = useState<Record<string, boolean>>({ 'Total Portfolio': true });
   const [exposureTab, setExposureTab] = useState<'All' | 'Category' | 'Sector' | 'MarketCap'>('All');
@@ -358,10 +382,10 @@ export default function Dashboard() {
   const pricingAssets = useMemo(() => {
     const list = [...assets];
     if (binanceStatus.state === 'cached') {
-      list.push(...binanceAssets.map(a => ({ ...a, symbol: a.symbol.replace('/USDT', '-USD') })));
+      list.push(...binanceAssets);
     }
     if (coindcxStatus.state === 'cached') {
-      list.push(...coindcxAssets.map(a => ({ ...a, symbol: a.symbol.replace('/USDT', '-USD') })));
+      list.push(...coindcxAssets);
     }
     return list;
   }, [assets, binanceStatus.state, binanceAssets, coindcxStatus.state, coindcxAssets]);
@@ -463,35 +487,17 @@ export default function Dashboard() {
           return;
         }
 
-        const mapped = data.map((a: any) => ({
-          ...a,
-          id: `${exchangeName.toLowerCase()}-${a.name}`,
-          entryPrice: 0,
-          currency: 'USD'
-        }));
+        const mapped = data.map((a: any) => normalizeExchangeAsset(a, exchangeName));
         setter(mapped);
         setStatus({ state: 'connected', lastSynced: Date.now() });
         
         // Background sync to Firebase
         syncToDb({ [`cachedCrypto.${exchangeName.toLowerCase()}`]: { lastSynced: Date.now(), assets: mapped } });
 
-        setPrices(prev => {
-          const newPrices = { ...prev };
-          data.forEach((crypto: any) => {
-            if (crypto.currentPrice) {
-              newPrices[crypto.symbol] = {
-                symbol: crypto.symbol,
-                regularMarketPrice: crypto.currentPrice,
-                currency: 'USD',
-                shortName: crypto.name,
-                quoteType: 'CRYPTO',
-                source: `${exchangeName} API`,
-                lastUpdated: Date.now()
-              };
-            }
-          });
-          return newPrices;
-        });
+        setPrices(prev => ({
+          ...prev,
+          ...exchangePrices(mapped, Date.now(), `${exchangeName} API`),
+        }));
       } catch (err: any) {
         console.warn(`${exchangeName} fetch failed:`, err.message);
         setStatus({ state: 'error', error: err.message });
@@ -503,15 +509,35 @@ export default function Dashboard() {
   }, [user, isAuthReady]);
   useEffect(() => {
     if (!cachedCrypto) return;
-    if (binanceStatus.state === 'error' && cachedCrypto.binance) {
-       setBinanceAssets(cachedCrypto.binance.assets.map((a: any) => ({ ...a, source: 'Cached', id: `cached-binance-${a.name}` })));
-       setBinanceStatus({ state: 'cached', lastSynced: cachedCrypto.binance.lastSynced });
+
+    const restore = (
+      cached: { lastSynced?: number; assets?: Asset[] } | undefined,
+      exchangeName: 'Binance' | 'CoinDCX',
+      setter: (assets: Asset[]) => void,
+      setStatus: (status: { state: 'cached'; lastSynced?: number }) => void,
+    ) => {
+      if (!cached || !Array.isArray(cached.assets) || cached.assets.length === 0) return;
+
+      const restored = cached.assets.map((asset) =>
+        normalizeExchangeAsset({ ...asset, source: 'Cached' } as any, exchangeName),
+      );
+      const lastSynced = Number(cached.lastSynced) || Date.now();
+
+      setter(restored);
+      setPrices(prev => ({
+        ...prev,
+        ...exchangePrices(restored, lastSynced, `${exchangeName} (cached)`),
+      }));
+      setStatus({ state: 'cached', lastSynced });
+    };
+
+    if (binanceStatus.state === 'error') {
+      restore(cachedCrypto.binance, 'Binance', setBinanceAssets, setBinanceStatus);
     }
-    if (coindcxStatus.state === 'error' && cachedCrypto.coindcx) {
-       setCoindcxAssets(cachedCrypto.coindcx.assets.map((a: any) => ({ ...a, source: 'Cached', id: `cached-coindcx-${a.name}` })));
-       setCoindcxStatus({ state: 'cached', lastSynced: cachedCrypto.coindcx.lastSynced });
+    if (coindcxStatus.state === 'error') {
+      restore(cachedCrypto.coindcx, 'CoinDCX', setCoindcxAssets, setCoindcxStatus);
     }
-  }, [binanceStatus.state, coindcxStatus.state, cachedCrypto]);
+  }, [binanceStatus.state, coindcxStatus.state, cachedCrypto, setPrices]);
 
 
   useEffect(() => {
@@ -759,7 +785,7 @@ export default function Dashboard() {
 
       if (priorityA !== priorityB) return priorityA - priorityB;
 
-      if (priorityA === 5) {
+      if (priorityA === 6) {
         const aSmall = isSmallCrypto(a);
         const bSmall = isSmallCrypto(b);
         if (aSmall !== bSmall) return aSmall ? 1 : -1;
@@ -919,137 +945,247 @@ export default function Dashboard() {
     setActiveTab('portfolio');
   };
 
-  return (
-    <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 font-sans p-4 md:p-8">
-      <div className="max-w-6xl mx-auto space-y-8">
-        {runningOperations.length > 0 && (
-          <div className="fixed top-0 left-0 right-0 z-50 bg-blue-600 text-white text-center py-2 text-sm font-semibold shadow-md animate-in slide-in-from-top-2">
-            {runningOperations.join(' | ')}...
-          </div>
-        )}
-        
-        {/* Header */}
-        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-          <div>
-            <h1 className="text-3xl font-bold tracking-tight">Asset Allocation Tracker</h1>
-            <p className="text-zinc-500 dark:text-zinc-400 mt-1 flex flex-col md:flex-row md:items-center gap-2">
-              <span>Track your investments in real-time</span>
-              <span className="flex items-center gap-1.5 mt-1 md:mt-0">
-                {(binanceStatus.state === 'connected' || binanceStatus.state === 'cached') && (
-                  <span className={`text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded font-bold ${binanceStatus.state === 'connected' ? 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400' : 'bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400'}`}>
-                    Binance: {binanceStatus.state === 'connected' ? 'Live' : 'Cached'}
-                  </span>
-                )}
-                {(coindcxStatus.state === 'connected' || coindcxStatus.state === 'cached') && (
-                  <span className={`text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded font-bold ${coindcxStatus.state === 'connected' ? 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400' : 'bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400'}`}>
-                    CoinDCX: {coindcxStatus.state === 'connected' ? 'Live' : 'Cached'}
-                  </span>
-                )}
-              </span>
-            </p>
-          </div>
-          <div className="flex gap-3">
-            <button 
-              onClick={() => setIsAllocationSettingsOpen(true)}
-              className="p-2 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
-              title="Ideal Allocation Target"
-            >
-              <Target className="w-5 h-5" />
-            </button>
-            <button 
-              onClick={() => setIsSettingsOpen(true)}
-              className="p-2 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
-              title="Settings"
-            >
-              <Settings className="w-5 h-5" />
-            </button>
-            <button 
-              onClick={logOut}
-              className="p-2 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
-              title="Sign Out"
-            >
-              <LogOut className="w-5 h-5" />
-            </button>
-            <button 
-              onClick={() => { fetchPrices(true); forceRefreshHoldings(); }}
-              disabled={isLoadingPrices || assets.length === 0}
-              className="p-2 rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors disabled:opacity-50"
-              title="Refresh All Data"
-            >
-              <RefreshCw className={`w-5 h-5 ${isLoadingPrices ? 'animate-spin' : ''}`} />
-            </button>
-            <button 
-              onClick={() => setIsAddModalOpen(true)}
-              className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-colors shadow-sm"
-            >
-              <Plus className="w-5 h-5" />
-              <span>Add Asset</span>
-            </button>
-          </div>
-        </div>
+  const navItemClass = (isActive: boolean) =>
+    `flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+      isActive
+        ? 'bg-zinc-100 text-zinc-900 dark:bg-zinc-800 dark:text-zinc-50'
+        : 'text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800/60 dark:hover:text-zinc-100'
+    }`;
 
-        {/* Tabs */}
-        <div className="flex items-center gap-1 p-1 bg-zinc-100 dark:bg-zinc-900 rounded-xl w-fit">
-          <button
-            onClick={() => setActiveTab('portfolio')}
-            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${activeTab === 'portfolio' ? 'bg-white dark:bg-zinc-800 text-blue-600 dark:text-blue-400 shadow-sm' : 'text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300'}`}
-          >
-            <PieChartIcon className="w-4 h-4" />
-            Portfolio
+  const navContent = (
+    <>
+      <div>
+        <p className="px-3 pb-2 text-[10px] font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">Workspace</p>
+        <div className="space-y-1">
+          <button onClick={() => { setActiveTab('portfolio'); setIsSidebarOpen(false); }} className={navItemClass(activeTab === 'portfolio')}>
+            <LayoutDashboard className="h-4 w-4 shrink-0" />
+            Dashboard
           </button>
-          <button
-            onClick={() => setActiveTab('screener')}
-            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all ${activeTab === 'screener' ? 'bg-white dark:bg-zinc-800 text-blue-600 dark:text-blue-400 shadow-sm' : 'text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300'}`}
-          >
-            <Filter className="w-4 h-4" />
+          <button onClick={() => { setActiveTab('screener'); setIsSidebarOpen(false); }} className={navItemClass(activeTab === 'screener')}>
+            <Filter className="h-4 w-4 shrink-0" />
             Screener
           </button>
         </div>
+      </div>
+      <div>
+        <p className="px-3 pb-2 text-[10px] font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">Preferences</p>
+        <div className="space-y-1">
+          <button onClick={() => { setIsAllocationSettingsOpen(true); setIsSidebarOpen(false); }} className={navItemClass(false)}>
+            <Target className="h-4 w-4 shrink-0" />
+            Ideal allocation
+          </button>
+          <button onClick={() => { setIsSettingsOpen(true); setIsSidebarOpen(false); }} className={navItemClass(false)}>
+            <Settings className="h-4 w-4 shrink-0" />
+            Settings
+          </button>
+        </div>
+      </div>
+    </>
+  );
 
+  const brand = (
+    <div className="flex items-center gap-2.5">
+      <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-zinc-900 text-white dark:bg-zinc-50 dark:text-zinc-900">
+        <TrendingUp className="h-4 w-4" />
+      </div>
+      <div className="leading-tight">
+        <div className="text-sm font-semibold tracking-tight">Asset Tracker</div>
+        <div className="text-[11px] text-zinc-500 dark:text-zinc-400">Portfolio intelligence</div>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100">
+      {runningOperations.length > 0 && (
+        <div className="fixed top-0 left-0 right-0 z-50 bg-blue-600 text-white text-center py-2 text-sm font-semibold shadow-md animate-in slide-in-from-top-2">
+          {runningOperations.join(' | ')}...
+        </div>
+      )}
+
+      {/* Desktop sidebar */}
+      <aside className="hidden lg:fixed lg:inset-y-0 lg:left-0 lg:z-40 lg:flex lg:w-64 lg:flex-col border-r border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
+        <div className="flex h-16 items-center border-b border-zinc-200 px-5 dark:border-zinc-800">
+          {brand}
+        </div>
+        <nav className="flex-1 space-y-6 overflow-y-auto px-3 py-5">
+          {navContent}
+        </nav>
+        <div className="border-t border-zinc-200 p-3 dark:border-zinc-800">
+          <div className="flex items-center gap-2.5 rounded-lg px-2 py-1.5">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-zinc-100 text-xs font-semibold uppercase text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
+              {(user?.displayName || user?.email || 'U').charAt(0)}
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-xs font-medium">{user?.displayName || 'Account'}</div>
+              <div className="truncate text-[11px] text-zinc-500 dark:text-zinc-400">{user?.email}</div>
+            </div>
+            <button
+              onClick={logOut}
+              title="Sign out"
+              className="rounded-md p-1.5 text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
+            >
+              <LogOut className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+      </aside>
+
+      {/* Mobile drawer */}
+      {isSidebarOpen && (
+        <div className="fixed inset-0 z-50 lg:hidden">
+          <div className="absolute inset-0 bg-zinc-950/40 backdrop-blur-sm" onClick={() => setIsSidebarOpen(false)} />
+          <div className="absolute inset-y-0 left-0 flex w-72 flex-col border-r border-zinc-200 bg-white shadow-xl dark:border-zinc-800 dark:bg-zinc-900">
+            <div className="flex h-16 items-center justify-between border-b border-zinc-200 px-4 dark:border-zinc-800">
+              {brand}
+              <button onClick={() => setIsSidebarOpen(false)} className="rounded-md p-1.5 text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <nav className="flex-1 space-y-6 overflow-y-auto px-3 py-5">{navContent}</nav>
+            <div className="border-t border-zinc-200 p-3 dark:border-zinc-800">
+              <button onClick={logOut} className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800">
+                <LogOut className="h-4 w-4" /> Sign out
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="lg:pl-64">
+        {/* Top bar */}
+        <header className="sticky top-0 z-30 flex h-16 items-center gap-3 border-b border-zinc-200 bg-white/80 px-4 backdrop-blur-md dark:border-zinc-800 dark:bg-zinc-900/80 sm:px-6 lg:px-8">
+          <button
+            onClick={() => setIsSidebarOpen(true)}
+            className="-ml-1 rounded-lg p-2 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 dark:hover:bg-zinc-800 dark:hover:text-zinc-100 lg:hidden"
+            aria-label="Open navigation"
+          >
+            <Menu className="h-5 w-5" />
+          </button>
+          <div className="min-w-0 flex-1">
+            <h1 className="truncate text-sm font-semibold tracking-tight">
+              {activeTab === 'portfolio' ? 'Dashboard' : 'Screener'}
+            </h1>
+            <p className="hidden truncate text-[11px] text-zinc-500 dark:text-zinc-400 sm:block">
+              {activeTab === 'portfolio' ? 'Overview of your entire portfolio' : 'Discover and compare instruments'}
+            </p>
+          </div>
+
+          <div className="hidden items-center gap-1.5 md:flex">
+            {(binanceStatus.state === 'connected' || binanceStatus.state === 'cached') && (
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-zinc-200 bg-white px-2.5 py-1 text-[11px] font-medium text-zinc-600 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300">
+                <span className={`h-1.5 w-1.5 rounded-full ${binanceStatus.state === 'connected' ? 'bg-emerald-500' : 'bg-amber-500'}`} />
+                Binance
+              </span>
+            )}
+            {(coindcxStatus.state === 'connected' || coindcxStatus.state === 'cached') && (
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-zinc-200 bg-white px-2.5 py-1 text-[11px] font-medium text-zinc-600 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300">
+                <span className={`h-1.5 w-1.5 rounded-full ${coindcxStatus.state === 'connected' ? 'bg-emerald-500' : 'bg-amber-500'}`} />
+                CoinDCX
+              </span>
+            )}
+          </div>
+
+          <button
+            onClick={() => { fetchPrices(true); forceRefreshHoldings(); }}
+            disabled={isLoadingPrices || assets.length === 0}
+            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-zinc-200 bg-white text-zinc-600 transition-colors hover:bg-zinc-50 hover:text-zinc-900 disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
+            title="Refresh all data"
+          >
+            <RefreshCw className={`h-4 w-4 ${isLoadingPrices ? 'animate-spin' : ''}`} />
+          </button>
+
+          <button
+            onClick={() => setIsAddModalOpen(true)}
+            className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-blue-600 px-3 text-sm font-medium text-white shadow-xs transition-colors hover:bg-blue-700"
+          >
+            <Plus className="h-4 w-4" />
+            <span className="hidden sm:inline">Add asset</span>
+          </button>
+        </header>
+
+        <main className="mx-auto w-full max-w-[1440px] space-y-6 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
         {activeTab === 'portfolio' ? (
           <>
-            {/* Summary Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="bg-white dark:bg-zinc-900 p-6 rounded-2xl border border-zinc-200 dark:border-zinc-800 shadow-sm">
-            <div className="flex items-center gap-2 text-zinc-500 dark:text-zinc-400 mb-2">
-              <DollarSign className="w-4 h-4" />
-              <h3 className="font-medium text-sm uppercase tracking-wider">Total Value</h3>
+            {/* KPI row */}
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="rounded-xl border border-zinc-200 bg-white p-5 shadow-xs dark:border-zinc-800 dark:bg-zinc-900">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-medium uppercase tracking-wider text-zinc-500 dark:text-zinc-400">Total value</span>
+              <div className="flex h-7 w-7 items-center justify-center rounded-md bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-400">
+                <Wallet className="h-3.5 w-3.5" />
+              </div>
             </div>
-            <div className="text-3xl font-bold">
+            <div className="mt-3 text-2xl font-semibold tracking-tight tabular-nums">
               ₹{portfolioStats.currentValue.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
             </div>
-          </div>
-          
-          <div className="bg-white dark:bg-zinc-900 p-6 rounded-2xl border border-zinc-200 dark:border-zinc-800 shadow-sm">
-            <div className="flex items-center gap-2 text-zinc-500 dark:text-zinc-400 mb-2">
-              <TrendingUp className="w-4 h-4" />
-              <h3 className="font-medium text-sm uppercase tracking-wider">Total Invested</h3>
-            </div>
-            <div className="text-3xl font-bold">
-              ₹{portfolioStats.investedValue.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+            <div className="mt-2 flex items-center gap-1.5 text-[11px]">
+              <span className={`inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 font-semibold ${totalProfitLoss >= 0 ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400' : 'bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-400'}`}>
+                {totalProfitLoss >= 0 ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />}
+                {totalProfitLossPercent.toFixed(2)}%
+              </span>
+              <span className="text-zinc-500 dark:text-zinc-400">all time</span>
             </div>
           </div>
 
-          <div className="bg-white dark:bg-zinc-900 p-6 rounded-2xl border border-zinc-200 dark:border-zinc-800 shadow-sm">
-            <div className="flex items-center gap-2 text-zinc-500 dark:text-zinc-400 mb-2">
-              {totalProfitLoss >= 0 ? <TrendingUp className="w-4 h-4 text-emerald-500" /> : <TrendingDown className="w-4 h-4 text-red-500" />}
-              <h3 className="font-medium text-sm uppercase tracking-wider">Total P&L</h3>
+          <div className="rounded-xl border border-zinc-200 bg-white p-5 shadow-xs dark:border-zinc-800 dark:bg-zinc-900">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-medium uppercase tracking-wider text-zinc-500 dark:text-zinc-400">Total invested</span>
+              <div className="flex h-7 w-7 items-center justify-center rounded-md bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
+                <TrendingUp className="h-3.5 w-3.5" />
+              </div>
             </div>
-            <div className={`text-3xl font-bold flex items-baseline gap-2 ${totalProfitLoss >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
+            <div className="mt-3 text-2xl font-semibold tracking-tight tabular-nums">
+              ₹{portfolioStats.investedValue.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+            </div>
+            <div className="mt-2 text-[11px] text-zinc-500 dark:text-zinc-400">Cost basis across all holdings</div>
+          </div>
+
+          <div className="rounded-xl border border-zinc-200 bg-white p-5 shadow-xs dark:border-zinc-800 dark:bg-zinc-900">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-medium uppercase tracking-wider text-zinc-500 dark:text-zinc-400">Total P&amp;L</span>
+              <div className={`flex h-7 w-7 items-center justify-center rounded-md ${totalProfitLoss >= 0 ? 'bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-400' : 'bg-red-50 text-red-600 dark:bg-red-500/10 dark:text-red-400'}`}>
+                {totalProfitLoss >= 0 ? <TrendingUp className="h-3.5 w-3.5" /> : <TrendingDown className="h-3.5 w-3.5" />}
+              </div>
+            </div>
+            <div className={`mt-3 text-2xl font-semibold tracking-tight tabular-nums ${totalProfitLoss >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
               {totalProfitLoss >= 0 ? '+' : ''}₹{totalProfitLoss.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
-              <span className="text-sm font-medium opacity-80">
-                ({totalProfitLoss >= 0 ? '+' : ''}{totalProfitLossPercent.toFixed(2)}%)
+            </div>
+            <div className="mt-2 flex items-center gap-1.5 text-[11px]">
+              <span className={`font-semibold ${totalProfitLoss >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
+                {totalProfitLoss >= 0 ? '+' : ''}{totalProfitLossPercent.toFixed(2)}%
               </span>
+              <span className="text-zinc-500 dark:text-zinc-400">unrealised return</span>
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-zinc-200 bg-white p-5 shadow-xs dark:border-zinc-800 dark:bg-zinc-900">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-medium uppercase tracking-wider text-zinc-500 dark:text-zinc-400">Holdings</span>
+              <div className="flex h-7 w-7 items-center justify-center rounded-md bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
+                <Layers className="h-3.5 w-3.5" />
+              </div>
+            </div>
+            <div className="mt-3 text-2xl font-semibold tracking-tight tabular-nums">
+              {mergedAssets.length.toLocaleString('en-IN')}
+            </div>
+            <div className="mt-2 text-[11px] text-zinc-500 dark:text-zinc-400">
+              Across {allCategories.length} allocation categories
             </div>
           </div>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Allocation Chart */}
-          <div className="bg-white dark:bg-zinc-900 p-6 rounded-2xl border border-zinc-200 dark:border-zinc-800 shadow-sm flex flex-col">
-            <div className="flex items-center gap-2 mb-6">
-              <PieChartIcon className="w-5 h-5 text-blue-500" />
-              <h2 className="text-lg font-semibold">Asset Allocation</h2>
+          <div className="bg-white dark:bg-zinc-900 p-6 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-xs flex flex-col">
+            <div className="mb-5 flex items-center gap-2.5">
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-400">
+                <PieChartIcon className="h-4 w-4" />
+              </div>
+              <div>
+                <h2 className="text-sm font-semibold tracking-tight">Asset Allocation</h2>
+                <p className="text-[11px] text-zinc-500 dark:text-zinc-400">By asset class</p>
+              </div>
             </div>
             {assets.length > 0 ? (
               <div className="flex flex-col flex-1">
@@ -1092,7 +1228,7 @@ export default function Dashboard() {
                 </div>
                 <div className="mt-6 pt-4 border-t border-zinc-100 dark:border-zinc-800 flex items-center justify-between">
                   <span className="text-sm font-bold text-zinc-500 uppercase tracking-wider">Total Allocation Value</span>
-                  <span className="text-lg font-black text-zinc-900 dark:text-zinc-100">
+                  <span className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
                     ₹{portfolioStats.currentValue.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
                   </span>
                 </div>
@@ -1105,10 +1241,15 @@ export default function Dashboard() {
           </div>
 
           {/* Market Cap Chart */}
-          <div className="bg-white dark:bg-zinc-900 p-6 rounded-2xl border border-zinc-200 dark:border-zinc-800 shadow-sm flex flex-col">
-            <div className="flex items-center gap-2 mb-6">
-              <BarChart3 className="w-5 h-5 text-purple-500" />
-              <h2 className="text-lg font-semibold">Market Cap Exposure</h2>
+          <div className="bg-white dark:bg-zinc-900 p-6 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-xs flex flex-col">
+            <div className="mb-5 flex items-center gap-2.5">
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-purple-50 text-purple-600 dark:bg-purple-500/10 dark:text-purple-400">
+                <BarChart3 className="h-4 w-4" />
+              </div>
+              <div>
+                <h2 className="text-sm font-semibold tracking-tight">Market Cap Exposure</h2>
+                <p className="text-[11px] text-zinc-500 dark:text-zinc-400">Direct vs fund exposure</p>
+              </div>
             </div>
             {marketCapData.length > 0 ? (
               <div className="flex flex-col flex-1">
@@ -1187,7 +1328,7 @@ export default function Dashboard() {
                           <div className="mt-2 pt-3 border-t border-zinc-200 dark:border-zinc-700 space-y-3">
                             {entry.constituents.filter((c: any) => c.type === 'direct').length > 0 && (
                               <div>
-                                <div className="text-[10px] uppercase tracking-wider text-zinc-500 font-bold mb-1.5">Direct Stocks:</div>
+                                <div className="text-[11px] uppercase tracking-wider text-zinc-500 font-bold mb-1.5">Direct Stocks:</div>
                                 {entry.constituents.filter((c: any) => c.type === 'direct').sort((a: any, b: any) => b.value - a.value).map((c: any) => (
                                   <div key={c.symbol} className="flex justify-between items-center text-xs text-zinc-600 dark:text-zinc-400 mb-1">
                                     <span className="truncate max-w-[180px]">{c.name}</span>
@@ -1198,7 +1339,7 @@ export default function Dashboard() {
                             )}
                             {entry.constituents.filter((c: any) => c.type === 'indirect').length > 0 && (
                               <div>
-                                <div className="text-[10px] uppercase tracking-wider text-zinc-500 font-bold mb-1.5">Mutual Funds / ETFs:</div>
+                                <div className="text-[11px] uppercase tracking-wider text-zinc-500 font-bold mb-1.5">Mutual Funds / ETFs:</div>
                                 {entry.constituents.filter((c: any) => c.type === 'indirect').sort((a: any, b: any) => b.value - a.value).map((c: any) => (
                                   <div key={c.symbol} className="flex flex-col mb-1">
                                     <div 
@@ -1263,7 +1404,7 @@ export default function Dashboard() {
                 </div>
                 <div className="mt-6 pt-4 border-t border-zinc-100 dark:border-zinc-800 flex items-center justify-between">
                   <span className="text-sm font-bold text-zinc-500 uppercase tracking-wider">Total Market Cap Value</span>
-                  <span className="text-lg font-black text-zinc-900 dark:text-zinc-100">
+                  <span className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
                     ₹{marketCapData.reduce((sum, item) => sum + item.value, 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
                   </span>
                 </div>
@@ -1276,12 +1417,17 @@ export default function Dashboard() {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mt-8">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Sector Allocation Chart */}
-          <div className="bg-white dark:bg-zinc-900 p-6 rounded-2xl border border-zinc-200 dark:border-zinc-800 shadow-sm flex flex-col">
-            <div className="flex items-center gap-2 mb-6">
-              <PieChartIcon className="w-5 h-5 text-emerald-500" />
-              <h2 className="text-lg font-semibold">Sector Allocation</h2>
+          <div className="bg-white dark:bg-zinc-900 p-6 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-xs flex flex-col">
+            <div className="mb-5 flex items-center gap-2.5">
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-400">
+                <PieChartIcon className="h-4 w-4" />
+              </div>
+              <div>
+                <h2 className="text-sm font-semibold tracking-tight">Sector Allocation</h2>
+                <p className="text-[11px] text-zinc-500 dark:text-zinc-400">Across sectors</p>
+              </div>
             </div>
             {sectorData.length > 0 ? (
               <div className="flex flex-col flex-1">
@@ -1360,7 +1506,7 @@ export default function Dashboard() {
                           <div className="mt-2 pt-3 border-t border-zinc-200 dark:border-zinc-700 space-y-3">
                             {entry.constituents.filter((c: any) => c.type === 'direct').length > 0 && (
                               <div>
-                                <div className="text-[10px] uppercase tracking-wider text-zinc-500 font-bold mb-1.5">Direct Stocks:</div>
+                                <div className="text-[11px] uppercase tracking-wider text-zinc-500 font-bold mb-1.5">Direct Stocks:</div>
                                 {entry.constituents.filter((c: any) => c.type === 'direct').sort((a: any, b: any) => b.value - a.value).map((c: any) => (
                                   <div key={c.symbol} className="flex justify-between items-center text-xs text-zinc-600 dark:text-zinc-400 mb-1">
                                     <span className="truncate max-w-[180px]">{c.name}</span>
@@ -1371,7 +1517,7 @@ export default function Dashboard() {
                             )}
                             {entry.constituents.filter((c: any) => c.type === 'indirect').length > 0 && (
                               <div>
-                                <div className="text-[10px] uppercase tracking-wider text-zinc-500 font-bold mb-1.5">Mutual Funds / ETFs:</div>
+                                <div className="text-[11px] uppercase tracking-wider text-zinc-500 font-bold mb-1.5">Mutual Funds / ETFs:</div>
                                 {entry.constituents.filter((c: any) => c.type === 'indirect').sort((a: any, b: any) => b.value - a.value).map((c: any) => (
                                   <div key={c.symbol} className="flex flex-col mb-1">
                                     <div 
@@ -1418,7 +1564,7 @@ export default function Dashboard() {
                   
                   <div className="pt-4 border-t border-zinc-100 dark:border-zinc-800 flex items-center justify-between">
                     <span className="text-sm font-bold text-zinc-500 uppercase tracking-wider">Total Sector Value</span>
-                    <span className="text-lg font-black text-zinc-900 dark:text-zinc-100">
+                    <span className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
                       ₹{sectorData.reduce((sum, item) => sum + item.value, 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
                     </span>
                   </div>
@@ -1432,10 +1578,15 @@ export default function Dashboard() {
           </div>
 
           {/* Mutual Fund / ETF Allocation Chart */}
-          <div className="bg-white dark:bg-zinc-900 p-6 rounded-2xl border border-zinc-200 dark:border-zinc-800 shadow-sm flex flex-col">
-            <div className="flex items-center gap-2 mb-6">
-              <PieChartIcon className="w-5 h-5 text-purple-500" />
-              <h2 className="text-lg font-semibold">Mutual Fund / ETF Allocation</h2>
+          <div className="bg-white dark:bg-zinc-900 p-6 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-xs flex flex-col">
+            <div className="mb-5 flex items-center gap-2.5">
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-purple-50 text-purple-600 dark:bg-purple-500/10 dark:text-purple-400">
+                <PieChartIcon className="h-4 w-4" />
+              </div>
+              <div>
+                <h2 className="text-sm font-semibold tracking-tight">Mutual Fund / ETF Allocation</h2>
+                <p className="text-[11px] text-zinc-500 dark:text-zinc-400">By fund type</p>
+              </div>
             </div>
             {fundData.length > 0 ? (
               <div className="flex flex-col flex-1">
@@ -1555,7 +1706,7 @@ export default function Dashboard() {
                           <div className="mt-2 pt-3 border-t border-zinc-200 dark:border-zinc-700 space-y-4">
                             <div>
                               <div className="flex items-center justify-between mb-2">
-                                <div className="text-[10px] uppercase tracking-wider text-zinc-500 font-bold">Underlying Holdings:</div>
+                                <div className="text-[11px] uppercase tracking-wider text-zinc-500 font-bold">Underlying Holdings:</div>
                                 <button 
                                   onClick={(e) => {
                                     e.stopPropagation();
@@ -1573,6 +1724,11 @@ export default function Dashboard() {
                                   Edit Holdings
                                 </button>
                               </div>
+                              {fundHoldings[entry.constituents[0]?.symbol]?.lookthrough === 'tracked-index' && (
+                                <div className="mb-2 text-[10px] text-amber-600 dark:text-amber-400 italic">
+                                  {fundHoldings[entry.constituents[0]?.symbol]?.note || 'Holdings mirror the tracked index, not the ETF’s exact portfolio.'}
+                                </div>
+                              )}
                               {entry.constituents.flatMap(c => c.subHoldings || []).sort((a: any, b: any) => b.value - a.value).map((sh: any) => (
                                 <div key={sh.symbol || sh.name} className="flex justify-between items-center text-xs text-zinc-600 dark:text-zinc-400 mb-1">
                                   <span className="truncate max-w-[180px]">{sh.name}</span>
@@ -1583,7 +1739,7 @@ export default function Dashboard() {
 
                             <div>
                               <div className="flex items-center justify-between mb-2">
-                                <div className="text-[10px] uppercase tracking-wider text-zinc-500 font-bold">Sector Allocation:</div>
+                                <div className="text-[11px] uppercase tracking-wider text-zinc-500 font-bold">Sector Allocation:</div>
                                 <button 
                                   onClick={(e) => {
                                     e.stopPropagation();
@@ -1621,7 +1777,7 @@ export default function Dashboard() {
                   
                   <div className="pt-4 border-t border-zinc-100 dark:border-zinc-800 flex items-center justify-between">
                     <span className="text-sm font-bold text-zinc-500 uppercase tracking-wider">Total Fund Value</span>
-                    <span className="text-lg font-black text-zinc-900 dark:text-zinc-100">
+                    <span className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
                       ₹{fundData.reduce((sum, item) => sum + item.value, 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}
                     </span>
                   </div>
@@ -1635,10 +1791,15 @@ export default function Dashboard() {
           </div>
 
           {/* Combined Sector by Market Cap Treemap */}
-          <div className="bg-white dark:bg-zinc-900 p-6 rounded-2xl border border-zinc-200 dark:border-zinc-800 shadow-sm flex flex-col">
-            <div className="flex items-center gap-2 mb-6">
-              <BarChart3 className="w-5 h-5 text-orange-500" />
-              <h2 className="text-lg font-semibold">Sector by Market Cap (Combined)</h2>
+          <div className="bg-white dark:bg-zinc-900 p-6 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-xs flex flex-col">
+            <div className="mb-5 flex items-center gap-2.5">
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-orange-50 text-orange-600 dark:bg-orange-500/10 dark:text-orange-400">
+                <BarChart3 className="h-4 w-4" />
+              </div>
+              <div>
+                <h2 className="text-sm font-semibold tracking-tight">Sector by Market Cap</h2>
+                <p className="text-[11px] text-zinc-500 dark:text-zinc-400">Combined view</p>
+              </div>
             </div>
             {treemapData[0] && treemapData[0].children && treemapData[0].children.length > 0 ? (
               <div className="flex-1">
@@ -1695,10 +1856,15 @@ export default function Dashboard() {
         </div>
 
         {/* Sector by Market Cap Stacked Bar Chart */}
-        <div className="bg-white dark:bg-zinc-900 p-6 rounded-2xl border border-zinc-200 dark:border-zinc-800 shadow-sm mt-8">
-          <div className="flex items-center gap-2 mb-6">
-            <BarChart3 className="w-5 h-5 text-blue-500" />
-            <h2 className="text-lg font-semibold">Sector Distribution across Market Caps</h2>
+        <div className="bg-white dark:bg-zinc-900 p-6 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-xs">
+          <div className="mb-5 flex items-center gap-2.5">
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-400">
+              <BarChart3 className="h-4 w-4" />
+            </div>
+            <div>
+              <h2 className="text-sm font-semibold tracking-tight">Sector Distribution across Market Caps</h2>
+              <p className="text-[11px] text-zinc-500 dark:text-zinc-400">Stacked by cap segment</p>
+            </div>
           </div>
           {stackedBarData.length > 0 ? (
             <div className="h-[400px]">
@@ -1804,26 +1970,31 @@ export default function Dashboard() {
 
         {/* Asset Allocation Analysis */}
         {allocationAnalysis.length > 0 && (
-          <div className="bg-white dark:bg-zinc-900 rounded-2xl border border-zinc-200 dark:border-zinc-800 shadow-sm overflow-hidden mt-8">
-            <div className="p-6 border-b border-zinc-200 dark:border-zinc-800 flex justify-between items-center">
-              <h2 className="text-lg font-semibold flex items-center gap-2">
-                <PieChartIcon className="w-5 h-5 text-blue-500" />
-                Asset Allocation Analysis
-              </h2>
-              <button onClick={() => setIsAllocationSettingsOpen(true)} className="text-sm text-blue-500 hover:text-blue-600 font-medium">
-                Edit Ideal Allocation
+          <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-xs overflow-hidden">
+            <div className="flex items-center justify-between gap-4 border-b border-zinc-200 p-5 dark:border-zinc-800">
+              <div className="flex items-center gap-2.5">
+                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-400">
+                  <PieChartIcon className="h-4 w-4" />
+                </div>
+                <div>
+                  <h2 className="text-sm font-semibold tracking-tight">Asset Allocation Analysis</h2>
+                  <p className="text-[11px] text-zinc-500 dark:text-zinc-400">Current vs ideal weights</p>
+                </div>
+              </div>
+              <button onClick={() => setIsAllocationSettingsOpen(true)} className="shrink-0 rounded-lg border border-zinc-200 px-3 py-1.5 text-xs font-medium text-zinc-700 transition-colors hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800">
+                Edit ideal allocation
               </button>
             </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-sm">
-                <thead className="bg-zinc-50 dark:bg-zinc-950/50 text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">
+            <div className="max-h-[70vh] overflow-auto">
+              <table className="w-full min-w-[880px] text-left text-sm">
+                <thead className="sticky top-0 z-10 bg-zinc-50/95 text-[11px] font-semibold text-zinc-500 uppercase tracking-wider backdrop-blur dark:bg-zinc-950/90 dark:text-zinc-400">
                   <tr>
-                    <th className="px-6 py-4 font-medium">Category</th>
-                    <th className="px-6 py-4 font-medium text-right">Current Value</th>
-                    <th className="px-6 py-4 font-medium text-right">Current %</th>
-                    <th className="px-6 py-4 font-medium text-right">Ideal %</th>
-                    <th className="px-6 py-4 font-medium text-right">Difference %</th>
-                    <th className="px-6 py-4 font-medium text-right">Action Needed</th>
+                    <th className="px-5 py-3.5 font-medium">Category</th>
+                    <th className="px-5 py-3.5 font-medium text-right">Current Value</th>
+                    <th className="px-5 py-3.5 font-medium text-right">Current %</th>
+                    <th className="px-5 py-3.5 font-medium text-right">Ideal %</th>
+                    <th className="px-5 py-3.5 font-medium text-right">Difference %</th>
+                    <th className="px-5 py-3.5 font-medium text-right">Action Needed</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
@@ -1841,44 +2012,49 @@ export default function Dashboard() {
           </div>
         )}
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 mt-8">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Asset List */}
-          <div className="lg:col-span-2 bg-white dark:bg-zinc-900 rounded-2xl border border-zinc-200 dark:border-zinc-800 shadow-sm overflow-hidden">
-            <div className="p-6 border-b border-zinc-200 dark:border-zinc-800">
-              <h2 className="text-lg font-semibold">Your Assets</h2>
-              <div className="flex items-center gap-3 text-[10px] text-zinc-500 mt-2">
-                <div className="flex items-center gap-1"><div className="w-2 h-2 rounded-full bg-blue-500"></div> Fetching</div>
-                <div className="flex items-center gap-1"><div className="w-2 h-2 rounded-full bg-emerald-500"></div> Fresh</div>
-                <div className="flex items-center gap-1"><div className="w-2 h-2 rounded-full bg-yellow-500"></div> Old</div>
-                <div className="flex items-center gap-1"><div className="w-2 h-2 rounded-full bg-zinc-300"></div> Unknown</div>
+          <div className="lg:col-span-2 bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-xs overflow-hidden">
+            <div className="border-b border-zinc-200 p-5 dark:border-zinc-800">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h2 className="text-sm font-semibold tracking-tight">Your Assets</h2>
+                  <p className="mt-0.5 text-[11px] text-zinc-500 dark:text-zinc-400">All holdings, grouped by category</p>
+                </div>
+                <div className="flex flex-wrap items-center gap-3 text-[10px] text-zinc-500 dark:text-zinc-400">
+                  <div className="flex items-center gap-1"><div className="h-1.5 w-1.5 rounded-full bg-blue-500"></div> Fetching</div>
+                  <div className="flex items-center gap-1"><div className="h-1.5 w-1.5 rounded-full bg-emerald-500"></div> Fresh</div>
+                  <div className="flex items-center gap-1"><div className="h-1.5 w-1.5 rounded-full bg-yellow-500"></div> Stale</div>
+                  <div className="flex items-center gap-1"><div className="h-1.5 w-1.5 rounded-full bg-zinc-300"></div> Unknown</div>
+                </div>
               </div>
             </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-sm">
-                <thead className="bg-zinc-50 dark:bg-zinc-950/50 text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">
+            <div className="max-h-[70vh] overflow-auto">
+              <table className="w-full min-w-[880px] text-left text-sm">
+                <thead className="sticky top-0 z-10 bg-zinc-50/95 text-[11px] font-semibold text-zinc-500 uppercase tracking-wider backdrop-blur dark:bg-zinc-950/90 dark:text-zinc-400">
                   <tr>
-                    <th className="px-6 py-4 font-medium cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors" onClick={() => handleSort('name')}>
+                    <th className="px-5 py-3.5 font-medium cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors" onClick={() => handleSort('name')}>
                       <div className="flex items-center">Asset <SortIndicator column="name" /></div>
                     </th>
-                    <th className="px-6 py-4 font-medium text-right cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors" onClick={() => handleSort('quantity')}>
+                    <th className="px-5 py-3.5 font-medium text-right cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors" onClick={() => handleSort('quantity')}>
                       <div className="flex items-center justify-end">Holdings <SortIndicator column="quantity" /></div>
                     </th>
-                    <th className="px-6 py-4 font-medium text-right cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors" onClick={() => handleSort('entryPrice')}>
+                    <th className="px-5 py-3.5 font-medium text-right cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors" onClick={() => handleSort('entryPrice')}>
                       <div className="flex items-center justify-end">Avg. Price <SortIndicator column="entryPrice" /></div>
                     </th>
-                    <th className="px-6 py-4 font-medium text-right cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors" onClick={() => handleSort('currentPrice')}>
+                    <th className="px-5 py-3.5 font-medium text-right cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors" onClick={() => handleSort('currentPrice')}>
                       <div className="flex items-center justify-end">LTP <SortIndicator column="currentPrice" /></div>
                     </th>
-                    <th className="px-6 py-4 font-medium text-right cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors" onClick={() => handleSort('investedValue')}>
+                    <th className="px-5 py-3.5 font-medium text-right cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors" onClick={() => handleSort('investedValue')}>
                       <div className="flex items-center justify-end">Invested Value <SortIndicator column="investedValue" /></div>
                     </th>
-                    <th className="px-6 py-4 font-medium text-right cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors" onClick={() => handleSort('currentValue')}>
+                    <th className="px-5 py-3.5 font-medium text-right cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors" onClick={() => handleSort('currentValue')}>
                       <div className="flex items-center justify-end">Current Value <SortIndicator column="currentValue" /></div>
                     </th>
-                    <th className="px-6 py-4 font-medium text-right cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors" onClick={() => handleSort('pnl')}>
+                    <th className="px-5 py-3.5 font-medium text-right cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors" onClick={() => handleSort('pnl')}>
                       <div className="flex items-center justify-end">P&L <SortIndicator column="pnl" /></div>
                     </th>
-                    <th className="px-6 py-4 font-medium text-center">Action</th>
+                    <th className="px-5 py-3.5 font-medium text-center">Action</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
@@ -1935,7 +2111,7 @@ export default function Dashboard() {
 
                         return (
                           <tr key={item.id} className={`group/row transition-colors ${isSubItem ? 'bg-zinc-50/50 dark:bg-zinc-900/10 border-l-2 border-blue-500/20' : 'hover:bg-zinc-50 dark:hover:bg-zinc-800/50'}`}>
-                            <td className={`px-6 py-4 ${isSubItem ? 'pl-14' : ''}`}>
+                            <td className={`px-5 py-3.5 ${isSubItem ? 'pl-14' : ''}`}>
                               <div className="flex items-center gap-2">
                                 {isGroupHead && (
                                   <button 
@@ -1983,16 +2159,16 @@ export default function Dashboard() {
                                 </div>
                               </div>
                             </td>
-                            <td className="px-6 py-4 text-right font-medium text-zinc-700 dark:text-zinc-300">
+                            <td className="px-5 py-3.5 text-right font-medium text-zinc-700 dark:text-zinc-300">
                               {item.quantity.toLocaleString('en-IN', { maximumFractionDigits: 6 })}
                               {item.symbol === 'GOLD-INR-GRAM' ? ' g' : ''}
                             </td>
-                            <td className="px-6 py-4 text-right">
+                            <td className="px-5 py-3.5 text-right">
                               <div className="text-zinc-900 dark:text-zinc-100 font-mono text-xs">
                                 ₹{entryPrice.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                               </div>
                             </td>
-                            <td className="px-6 py-4 text-right">
+                            <td className="px-5 py-3.5 text-right">
                               {priceData || item.manualPrice ? (
                                 <div className="flex flex-col items-end">
                                   <div className="text-zinc-900 dark:text-zinc-100 font-mono text-xs font-bold">
@@ -2002,13 +2178,13 @@ export default function Dashboard() {
                                 </div>
                               ) : <span className="text-zinc-400 text-xs italic">N/A</span>}
                             </td>
-                            <td className="px-6 py-4 text-right font-mono text-xs text-zinc-500">
+                            <td className="px-5 py-3.5 text-right font-mono text-xs text-zinc-500">
                               ₹{investedValue.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                             </td>
-                            <td className="px-6 py-4 text-right font-bold text-zinc-900 dark:text-zinc-100 font-mono text-xs">
+                            <td className="px-5 py-3.5 text-right font-bold text-zinc-900 dark:text-zinc-100 font-mono text-xs">
                               ₹{currentValue.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                             </td>
-                            <td className="px-6 py-4 text-right">
+                            <td className="px-5 py-3.5 text-right">
                               <div className={`font-bold text-xs ${pnl >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
                                 {pnl >= 0 ? '+' : ''}₹{pnl.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
                               </div>
@@ -2016,7 +2192,7 @@ export default function Dashboard() {
                                 {pnl >= 0 ? '+' : ''}{pnlPercent.toFixed(2)}%
                               </div>
                             </td>
-                            <td className="px-6 py-4 text-center">
+                            <td className="px-5 py-3.5 text-center">
                               {!isGroupHead ? (
                                 <div className="flex justify-center gap-1 opacity-100 lg:opacity-40 group-hover/row:opacity-100 transition-opacity">
                                   {!item.id.includes('binance-') && !item.id.includes('coindcx-') ? (
@@ -2052,7 +2228,7 @@ export default function Dashboard() {
                                   className="bg-zinc-100/50 dark:bg-zinc-800/30 border-t border-zinc-200 dark:border-zinc-800 cursor-pointer"
                                   onClick={() => setExpandedTableCategories(prev => ({ ...prev, [currentCategory]: !prev[currentCategory] }))}
                                 >
-                                  <td colSpan={8} className="px-6 py-2 text-[10px] font-bold uppercase tracking-widest text-zinc-500 dark:text-zinc-400 flex items-center gap-2">
+                                  <td colSpan={8} className="px-6 py-2 text-[11px] font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 flex items-center gap-2">
                                     <ChevronDown className="w-3 h-3" />
                                     {currentCategory} ({portfolioStats.byCategory[currentCategory]?.assetCount || 0})
                                   </td>
@@ -2067,20 +2243,20 @@ export default function Dashboard() {
                                   className="bg-zinc-50/50 dark:bg-zinc-900/50 border-t border-zinc-200 dark:border-zinc-800 cursor-pointer hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50 transition-colors"
                                   onClick={() => setExpandedTableCategories(prev => ({ ...prev, [currentCategory]: true }))}
                                 >
-                                  <td className="px-6 py-4 font-bold text-zinc-700 dark:text-zinc-300">
+                                  <td className="px-5 py-3.5 font-bold text-zinc-700 dark:text-zinc-300">
                                     <div className="flex items-center gap-2"><ChevronRight className="w-4 h-4 text-zinc-400" />{currentCategory} ({portfolioStats.byCategory[currentCategory]?.assetCount || 0})</div>
                                   </td>
-                                  <td className="px-6 py-4 text-right font-medium text-zinc-500">
-                                    {stats.quantity.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                                  <td className="px-5 py-3.5 text-right font-medium text-zinc-500">
+                                    <span className="text-zinc-400">—</span>
                                   </td>
-                                  <td colSpan={2} className="px-6 py-4"></td>
-                                  <td className="px-6 py-4 text-right font-bold text-zinc-900 dark:text-zinc-100">
+                                  <td colSpan={2} className="px-5 py-3.5"></td>
+                                  <td className="px-5 py-3.5 text-right font-bold text-zinc-900 dark:text-zinc-100">
                                     ₹{stats.investedValue.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
                                   </td>
-                                  <td className="px-6 py-4 text-right font-bold text-zinc-900 dark:text-zinc-100">
+                                  <td className="px-5 py-3.5 text-right font-bold text-zinc-900 dark:text-zinc-100">
                                     ₹{stats.currentValue.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
                                   </td>
-                                  <td className="px-6 py-4 text-right font-bold">
+                                  <td className="px-5 py-3.5 text-right font-bold">
                                     <div className={`${combinedPnl >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
                                       {combinedPnl >= 0 ? '+' : ''}₹{combinedPnl.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
                                     </div>
@@ -2088,7 +2264,7 @@ export default function Dashboard() {
                                       {combinedPnl >= 0 ? '+' : ''}{combinedPnlPercent.toFixed(2)}%
                                     </div>
                                   </td>
-                                  <td className="px-6 py-4"></td>
+                                  <td className="px-5 py-3.5"></td>
                                 </tr>
                               );
                             }
@@ -2108,7 +2284,7 @@ export default function Dashboard() {
                                       className="bg-zinc-100/30 dark:bg-zinc-800/10 border-t border-zinc-200/50 dark:border-zinc-800/50 cursor-pointer"
                                       onClick={() => setExpandedTableCategories(prev => ({ ...prev, 'SmallCrypto': !prev['SmallCrypto'] }))}
                                     >
-                                      <td colSpan={8} className="px-6 py-2 pl-10 text-[10px] font-bold uppercase tracking-widest text-zinc-500 dark:text-zinc-400 flex items-center gap-2">
+                                      <td colSpan={8} className="px-6 py-2 pl-10 text-[11px] font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 flex items-center gap-2">
                                         <ChevronDown className="w-3 h-3" /> Others (Crypto &lt; ₹10)
                                       </td>
                                     </tr>
@@ -2117,19 +2293,19 @@ export default function Dashboard() {
                                       className="bg-zinc-50/30 dark:bg-zinc-900/30 border-t border-zinc-200/50 dark:border-zinc-800/50 cursor-pointer hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50 transition-colors"
                                       onClick={() => setExpandedTableCategories(prev => ({ ...prev, 'SmallCrypto': true }))}
                                     >
-                                      <td className="px-6 py-3 pl-10 font-bold text-zinc-600 dark:text-zinc-400">
-                                        <div className="flex items-center gap-2 text-xs"><ChevronRight className="w-3 h-3 text-zinc-400" /> Others (Crypto &lt; ₹10)</div>
+                                      <td className="px-5 py-2.5 pl-10 font-bold text-zinc-600 dark:text-zinc-400">
+                                        <div className="flex items-center gap-2 text-xs"><ChevronRight className="w-3 h-3 text-zinc-400" /> Others (Crypto &lt; ₹10) · {portfolioStats.smallCryptoStats.count} assets</div>
                                       </td>
-                                      <td className="px-6 py-3 text-right font-medium text-zinc-500 text-xs">{portfolioStats.smallCryptoStats.quantity.toLocaleString('en-IN')}</td>
-                                      <td colSpan={2} className="px-6 py-3"></td>
-                                      <td className="px-6 py-3 text-right font-bold text-zinc-700 dark:text-zinc-300 text-xs">₹{portfolioStats.smallCryptoStats.investedValue.toLocaleString('en-IN')}</td>
-                                      <td className="px-6 py-3 text-right font-bold text-zinc-700 dark:text-zinc-300 text-xs">₹{portfolioStats.smallCryptoStats.currentValue.toLocaleString('en-IN')}</td>
-                                      <td className="px-6 py-3 text-right font-bold text-xs">
+                                      <td className="px-5 py-2.5 text-right font-medium text-zinc-400 text-xs">—</td>
+                                      <td colSpan={2} className="px-5 py-2.5"></td>
+                                      <td className="px-5 py-2.5 text-right font-bold text-zinc-700 dark:text-zinc-300 text-xs">₹{portfolioStats.smallCryptoStats.investedValue.toLocaleString('en-IN')}</td>
+                                      <td className="px-5 py-2.5 text-right font-bold text-zinc-700 dark:text-zinc-300 text-xs">₹{portfolioStats.smallCryptoStats.currentValue.toLocaleString('en-IN')}</td>
+                                      <td className="px-5 py-2.5 text-right font-bold text-xs">
                                         <div className={`${(portfolioStats.smallCryptoStats.currentValue - portfolioStats.smallCryptoStats.investedValue) >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
                                           {(portfolioStats.smallCryptoStats.currentValue - portfolioStats.smallCryptoStats.investedValue) >= 0 ? '+' : ''}₹{(portfolioStats.smallCryptoStats.currentValue - portfolioStats.smallCryptoStats.investedValue).toLocaleString('en-IN')}
                                         </div>
                                       </td>
-                                      <td className="px-6 py-3"></td>
+                                      <td className="px-5 py-2.5"></td>
                                     </tr>
                                   )
                                 )}
@@ -2156,50 +2332,50 @@ export default function Dashboard() {
                         className="bg-zinc-100 dark:bg-zinc-900 font-bold border-t-2 border-zinc-200 dark:border-zinc-800 cursor-pointer hover:bg-zinc-200 dark:hover:bg-zinc-800 transition-colors"
                         onClick={() => setExpandedTableCategories(prev => ({ ...prev, 'Total Portfolio': !prev['Total Portfolio'] }))}
                       >
-                        <td className="px-6 py-4 text-zinc-900 dark:text-zinc-100 uppercase tracking-wider text-xs flex items-center gap-2">
+                        <td className="px-5 py-3.5 text-zinc-900 dark:text-zinc-100 uppercase tracking-wider text-xs flex items-center gap-2">
                           {expandedTableCategories['Total Portfolio'] ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
                           Total Portfolio
                         </td>
-                        <td className="px-6 py-4 text-right">
-                          {mergedAssets.reduce((sum, a) => sum + a.quantity, 0).toLocaleString('en-IN')}
+                        <td className="px-5 py-3.5 text-right">
+                          <span className="text-zinc-400">—</span>
                         </td>
-                        <td className="px-6 py-4 text-right"></td>
-                        <td className="px-6 py-4 text-right"></td>
-                        <td className="px-6 py-4 text-right">
+                        <td className="px-5 py-3.5 text-right"></td>
+                        <td className="px-5 py-3.5 text-right"></td>
+                        <td className="px-5 py-3.5 text-right">
                           ₹{portfolioStats.investedValue.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
                         </td>
-                        <td className="px-6 py-4 text-right">
+                        <td className="px-5 py-3.5 text-right">
                           ₹{portfolioStats.currentValue.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
                         </td>
-                        <td className="px-6 py-4 text-right">
+                        <td className="px-5 py-3.5 text-right">
                           <div className={`flex flex-col items-end ${totalProfitLoss >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
                             <span>{totalProfitLoss >= 0 ? '+' : ''}₹{totalProfitLoss.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
                             <span className="text-[10px]">({totalProfitLossPercent.toFixed(2)}%)</span>
                           </div>
                         </td>
-                        <td className="px-6 py-4"></td>
+                        <td className="px-5 py-3.5"></td>
                       </tr>
                       {expandedTableCategories['Total Portfolio'] && (
                         <tr className="bg-zinc-50 dark:bg-zinc-950/50">
                           <td colSpan={8} className="px-6 py-6">
                             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                               {/* Summary Stats */}
-                              <div className="p-4 bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm">
-                                <div className="text-[10px] uppercase tracking-widest text-zinc-500 mb-1">Total Invested</div>
+                              <div className="p-4 bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-xs">
+                                <div className="text-[11px] uppercase tracking-wider text-zinc-500 mb-1">Total Invested</div>
                                 <div className="text-lg font-bold">₹{portfolioStats.investedValue.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</div>
                               </div>
-                              <div className="p-4 bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm">
-                                <div className="text-[10px] uppercase tracking-widest text-zinc-500 mb-1">Current Value</div>
+                              <div className="p-4 bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-xs">
+                                <div className="text-[11px] uppercase tracking-wider text-zinc-500 mb-1">Current Value</div>
                                 <div className="text-lg font-bold">₹{portfolioStats.currentValue.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</div>
                               </div>
-                              <div className="p-4 bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm">
-                                <div className="text-[10px] uppercase tracking-widest text-zinc-500 mb-1">Total P&L</div>
+                              <div className="p-4 bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-xs">
+                                <div className="text-[11px] uppercase tracking-wider text-zinc-500 mb-1">Total P&L</div>
                                 <div className={`text-lg font-bold ${totalProfitLoss >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
                                   ₹{totalProfitLoss.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
                                 </div>
                               </div>
-                              <div className="p-4 bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm">
-                                <div className="text-[10px] uppercase tracking-widest text-zinc-500 mb-1">Total Returns</div>
+                              <div className="p-4 bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-xs">
+                                <div className="text-[11px] uppercase tracking-wider text-zinc-500 mb-1">Total Returns</div>
                                 <div className={`text-lg font-bold ${totalProfitLossPercent >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
                                   {totalProfitLossPercent >= 0 ? '+' : ''}{totalProfitLossPercent.toFixed(2)}%
                                 </div>
@@ -2207,7 +2383,7 @@ export default function Dashboard() {
                             </div>
 
                             <div className="mt-6">
-                              <h4 className="text-xs font-bold uppercase tracking-widest text-zinc-500 mb-4 px-1">Category Breakdown</h4>
+                              <h4 className="text-xs font-bold uppercase tracking-wider text-zinc-500 mb-4 px-1">Category Breakdown</h4>
                               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                                 {Object.entries(
                                   mergedAssets.reduce((acc, asset) => {
@@ -2240,9 +2416,9 @@ export default function Dashboard() {
                                   const pnl = stats.currentValue - stats.investedValue;
                                   const pnlPercent = stats.investedValue > 0 ? (pnl / stats.investedValue) * 100 : 0;
                                   return (
-                                    <div key={category} className="p-4 bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm">
+                                    <div key={category} className="p-4 bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-xs">
                                       <div className="flex justify-between items-start mb-2">
-                                        <div className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">{category}</div>
+                                        <div className="text-[11px] font-bold uppercase tracking-wider text-zinc-500">{category}</div>
                                         <div className={`text-[10px] font-bold ${pnlPercent >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>
                                           {pnlPercent >= 0 ? '+' : ''}{pnlPercent.toFixed(1)}%
                                         </div>
@@ -2269,11 +2445,16 @@ export default function Dashboard() {
           </div>
 
           {/* Top Underlying Holdings */}
-          <div className="lg:col-span-1 bg-white dark:bg-zinc-900 rounded-2xl border border-zinc-200 dark:border-zinc-800 shadow-sm overflow-hidden flex flex-col">
+          <div className="lg:col-span-1 bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-xs overflow-hidden flex flex-col">
             <div className="p-5 border-b border-zinc-200 dark:border-zinc-800">
-              <div className="flex items-center gap-2 mb-4">
-                <List className="w-5 h-5 text-emerald-500" />
-                <h2 className="text-lg font-semibold">Top Underlying Exposure</h2>
+              <div className="mb-4 flex items-center gap-2.5">
+                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-400">
+                  <List className="h-4 w-4" />
+                </div>
+                <div>
+                  <h2 className="text-sm font-semibold tracking-tight">Top Underlying Exposure</h2>
+                  <p className="text-[11px] text-zinc-500 dark:text-zinc-400">Largest positions</p>
+                </div>
               </div>
               <div className="flex space-x-1 bg-zinc-100 dark:bg-zinc-800/50 p-1 rounded-lg">
                 {(['All', 'Category', 'Sector', 'MarketCap'] as const).map(tab => (
@@ -2284,8 +2465,8 @@ export default function Dashboard() {
                       setExpandedExposureGroup(null);
                     }}
                     className={`flex-1 py-1.5 text-xs font-medium rounded-md transition-colors ${
-                      exposureTab === tab 
-                        ? 'bg-white dark:bg-zinc-700 text-zinc-900 dark:text-zinc-100 shadow-sm' 
+                      exposureTab === tab
+                        ? 'bg-white dark:bg-zinc-700 text-zinc-900 dark:text-zinc-100 shadow-xs'
                         : 'text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300'
                     }`}
                   >
@@ -2417,6 +2598,7 @@ export default function Dashboard() {
     ) : (
       <Screener onAdd={handleScreenerAdd} />
     )}
+        </main>
       </div>
 
 
@@ -2430,6 +2612,7 @@ export default function Dashboard() {
         setSearchQuery={setSearchQuery}
         searchResults={searchResults}
         setSearchResults={setSearchResults}
+        searchSource={searchSource}
         selectedResult={selectedResult}
         setSelectedResult={setSelectedResult}
         isSearching={isSearching}

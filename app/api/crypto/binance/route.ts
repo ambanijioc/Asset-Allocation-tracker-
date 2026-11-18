@@ -3,12 +3,44 @@ import { binance } from 'ccxt';
 
 export const dynamic = 'force-dynamic';
 
+/** Markets that do not exist as `<coin>/USDT` pairs. */
+const STABLECOINS = new Set([
+  'USDT',
+  'USDC',
+  'BUSD',
+  'FDUSD',
+  'TUSD',
+  'DAI',
+  'USDP',
+  'PYUSD',
+  'USDD',
+  'GUSD',
+]);
+
+/** Binance Earn wraps balances in LD<asset>, e.g. LDUSDT. */
+const cleanBalanceSymbol = (symbol: string) =>
+  symbol.startsWith('LD') && symbol.length > 3 ? symbol.substring(2) : symbol;
+
+interface ExchangeAsset {
+  symbol: string;
+  name: string;
+  quantity: number;
+  type: 'CRYPTO' | 'CASH';
+  currency: 'USD' | 'INR';
+  currentPrice: number;
+  entryPrice: number;
+  exchange: 'Binance';
+}
+
 export async function GET() {
   const apiKey = process.env.BINANCE_API_KEY;
   const secret = process.env.BINANCE_SECRET;
 
   if (!apiKey || !secret) {
-    return NextResponse.json({ error: "Missing Binance API keys in Render Environment" }, { status: 400 });
+    return NextResponse.json(
+      { error: 'Missing Binance API keys in Render Environment' },
+      { status: 400 },
+    );
   }
 
   try {
@@ -19,49 +51,61 @@ export async function GET() {
     });
 
     const balance = await exchange.fetchBalance();
-    
-    // Log detailed balance for diagnostic purposes
-    console.log('--- RAW BALANCE STRUCTURE ---');
-    console.log('Balance total keys:', balance.total ? Object.keys(balance.total).length : 'No total');
-    
-    // Fetch all tickers from Binance once to get current prices
-    const tickers = await exchange.fetchTickers();
-    
-    // Aggregate by clean symbol
+    await exchange.loadMarkets();
+
+    // Aggregate Earn/LD balances back into their underlying asset.
     const aggregatedBalances: Record<string, number> = {};
-    Object.entries(balance.total || {}).forEach(([symbol, qty]) => {
-      if (typeof qty === 'number' && qty > 0) {
-        let cleanSymbol = symbol;
-        if (symbol.startsWith('LD') && symbol.length > 3) {
-          cleanSymbol = symbol.substring(2);
-        }
-        aggregatedBalances[cleanSymbol] = (aggregatedBalances[cleanSymbol] || 0) + qty;
-      }
+    Object.entries(balance.total || {}).forEach(([symbol, rawQty]) => {
+      const qty = Number(rawQty);
+      if (!Number.isFinite(qty) || qty <= 0) return;
+      const cleanSymbol = cleanBalanceSymbol(symbol).toUpperCase();
+      aggregatedBalances[cleanSymbol] = (aggregatedBalances[cleanSymbol] || 0) + qty;
     });
 
-    // Map aggregated balances to crypto assets with prices
-    const cryptoAssets = Object.entries(aggregatedBalances)
-      .map(([cleanSymbol, qty]) => {
-        // Ensure standard USDT pair formatting
-        const pair = `${cleanSymbol}/USDT`;
-        
-        // Get the current price from fetched tickers, fallback to 0
-        const currentPrice = tickers[pair]?.last || 0;
+    // Only ask for the markets we actually hold. Fetching every Binance ticker
+    // is slow and is the main reason this route used to time out/return zeros.
+    const bases = Object.keys(aggregatedBalances);
+    const pairs = bases
+      .filter((base) => base !== 'INR' && !STABLECOINS.has(base))
+      .map((base) => `${base}/USDT`)
+      .filter((pair) => Boolean(exchange.markets?.[pair]));
+
+    let tickers: Record<string, { last?: number } | undefined> = {};
+    try {
+      tickers = pairs.length > 0 ? await exchange.fetchTickers(pairs) : {};
+    } catch (error) {
+      console.warn('Binance targeted ticker fetch failed, retrying full list:', error);
+      tickers = await exchange.fetchTickers();
+    }
+
+    const cryptoAssets: ExchangeAsset[] = bases
+      .map((base) => {
+        const isInr = base === 'INR';
+        const isStablecoin = STABLECOINS.has(base);
+        const price = isInr || isStablecoin
+          ? 1
+          : Number(tickers[`${base}/USDT`]?.last) || 0;
 
         return {
-          symbol: pair,
-          name: cleanSymbol,
-          quantity: qty,
-          type: 'CRYPTO',
-          currentPrice: currentPrice,
-          exchange: 'Binance'
+          symbol: isInr ? 'INR' : `${base}-USD`,
+          name: base,
+          quantity: aggregatedBalances[base],
+          type: (isInr ? 'CASH' : 'CRYPTO') as ExchangeAsset['type'],
+          currency: (isInr ? 'INR' : 'USD') as ExchangeAsset['currency'],
+          currentPrice: price,
+          entryPrice: price,
+          exchange: 'Binance' as const,
         };
-      });
+      })
+      .sort((a, b) => b.currentPrice * b.quantity - a.currentPrice * a.quantity);
 
-    console.log(`Filtered ${cryptoAssets.length} crypto assets with prices.`);
+    console.log(`Returning ${cryptoAssets.length} Binance balances (${pairs.length} priced pairs).`);
     return NextResponse.json(cryptoAssets);
   } catch (error: any) {
-    // Silently handle errors to prevent breaking the dashboard
-    return NextResponse.json({ error: "Missing Binance API keys in Render Environment" }, { status: 400 });
+    console.error('Binance API error:', error?.message || error);
+    return NextResponse.json(
+      { error: error?.message || 'Binance request failed' },
+      { status: 502 },
+    );
   }
 }

@@ -18,7 +18,7 @@ export default function ManualSectorModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-      <div className="bg-white dark:bg-zinc-900 rounded-2xl shadow-xl w-full max-w-lg overflow-hidden border border-zinc-200 dark:border-zinc-800">
+      <div className="bg-white dark:bg-zinc-900 rounded-xl shadow-2xl w-full max-w-lg overflow-hidden border border-zinc-200 dark:border-zinc-800">
         <div className="p-5 border-b border-zinc-200 dark:border-zinc-800 flex justify-between items-center">
           <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">Edit Sectors: {manualSectorModal.name}</h2>
           <button onClick={() => setManualSectorModal(null)} className="text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200">

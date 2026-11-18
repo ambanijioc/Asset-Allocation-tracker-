@@ -84,10 +84,11 @@ export function usePortfolioCalculations({
       acc.smallCryptoStats.quantity += asset.quantity;
       acc.smallCryptoStats.currentValue += currentValue;
       acc.smallCryptoStats.investedValue += investedValue;
+      acc.smallCryptoStats.count += 1;
     }
     
     return acc;
-  }, { currentValue: 0, investedValue: 0, byCategory: {} as Record<string, { quantity: number; currentValue: number; investedValue: number; assetCount: number; }>, smallCryptoStats: { quantity: 0, currentValue: 0, investedValue: 0 } });
+  }, { currentValue: 0, investedValue: 0, byCategory: {} as Record<string, { quantity: number; currentValue: number; investedValue: number; assetCount: number; }>, smallCryptoStats: { quantity: 0, currentValue: 0, investedValue: 0, count: 0 } });
 
   const totalProfitLoss = portfolioStats.currentValue - portfolioStats.investedValue;
   const totalProfitLossPercent = portfolioStats.investedValue > 0 ? (totalProfitLoss / portfolioStats.investedValue) * 100 : 0;

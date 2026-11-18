@@ -95,12 +95,11 @@ def betterstack_query_sql(host: str, user: str, pwd: str, table: str, query_filt
   SELECT dt, raw FROM s3Cluster(primary, {s3_table}) WHERE _row_type = 1
 ) {where_clause} ORDER BY dt DESC LIMIT {limit} FORMAT JSONEachRow"""
 
-    url = f"https://{host}?output_format_pretty_row_numbers=0"
-    import base64
-    cred = base64.b64encode(f"{user}:{pwd}".encode()).decode()
-    data = sql.encode()
-    req = urllib.request.Request(url, data=data, headers={"Authorization": f"Basic {cred}", "Content-Type":"text/plain"}, method="POST")
-    try:
+    def run(query: str):
+        url = f"https://{host}?output_format_pretty_row_numbers=0"
+        import base64
+        cred = base64.b64encode(f"{user}:{pwd}".encode()).decode()
+        req = urllib.request.Request(url, data=query.encode(), headers={"Authorization": f"Basic {cred}", "Content-Type":"text/plain"}, method="POST")
         with urllib.request.urlopen(req, timeout=30) as r:
             text = r.read().decode()
             rows=[]
@@ -109,8 +108,34 @@ def betterstack_query_sql(host: str, user: str, pwd: str, table: str, query_filt
                 try: rows.append(json.loads(line))
                 except: rows.append({"raw": line})
             return rows
+
+    try:
+        return run(sql)
     except urllib.error.HTTPError as e:
         body=e.read().decode()[:3000]
+        # A source created after the SQL connection was set up may only be
+        # reachable through the S3 (cold storage) table. Retry without the
+        # live remote() table before giving up.
+        if "CLUSTER_DOESNT_EXIST" in body or "NAMED_COLLECTION_DOESNT_EXIST" in body:
+            s3_sql = f"""SELECT dt, raw FROM s3Cluster(primary, {s3_table})
+{where_clause} ORDER BY dt DESC LIMIT {limit} FORMAT JSONEachRow"""
+            try:
+                rows = run(s3_sql)
+            except urllib.error.HTTPError as e2:
+                body2=e2.read().decode()[:2000]
+                print(f"[BetterStack SQL] live and S3 queries failed: {e2.code} {e2.reason}\n{body2}", file=sys.stderr)
+                return None
+            if not rows:
+                print(
+                    "[BetterStack SQL] live cluster is not available and S3 returned 0 rows.\n"
+                    "  The source exists, but it is not attached to this SQL connection.\n"
+                    "  Recreate the SQL API connection in BetterStack (Team settings -> SQL API),\n"
+                    "  then update BETTERSTACK_SQL_HOST/USER/PASSWORD in .env.logs.\n"
+                    f"  SQL: {s3_sql}",
+                    file=sys.stderr,
+                )
+                return None
+            return rows
         print(f"[BetterStack SQL] query failed: {e.code} {e.reason}\n{body}\nSQL:\n{sql}", file=sys.stderr)
         return None
     except Exception as e:

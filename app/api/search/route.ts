@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import YahooFinance from 'yahoo-finance2';
+import { recordIndianApiRequest } from '@/lib/indianapi-usage';
 
 const yahoo = new YahooFinance();
 
@@ -11,9 +12,6 @@ const STOCK_APIS = (process.env.INDIAN_API_ENDPOINTS || 'https://stock.indianapi
   }
   return url;
 });
-
-// New API source
-const NEW_STOCK_APIS = ['https://military-jobye-haiqstudios-14f59639.koyeb.app/search'];
 
 const STOCK_KEYS = (process.env.INDIAN_API_KEYS || '').split(',').map(s => s.trim());
 
@@ -51,25 +49,32 @@ async function fetchWithFailover(endpoints: string[], query: string, transformFn
   for (let i = 0; i < endpoints.length; i++) {
     const endpoint = endpoints[i];
     const apiKey = keys[i];
+    const isIndianApi = endpoint.includes('indianapi.in');
     
     // indianapi.in requires an API key. If it's missing, skip to avoid 400 errors.
-    if (endpoint.includes('indianapi.in') && !apiKey) {
+    if (isIndianApi && !apiKey) {
       continue;
     }
 
     try {
       const headers: HeadersInit = { 'Content-Type': 'application/json' };
-      let url = `${endpoint}?${paramName}=${encodeURIComponent(query)}`;
+      const url = `${endpoint}?${paramName}=${encodeURIComponent(query)}`;
       if (apiKey) {
-        if (endpoint.includes('indianapi.in')) {
+        if (isIndianApi) {
+          // Header only: IndianAPI ignores api_key in the query string and
+          // putting it in the URL risks leaking it into proxy/access logs.
           headers['X-API-Key'] = apiKey;
-          url += `&api_key=${apiKey}`;
         } else {
           headers['Authorization'] = `Bearer ${apiKey}`;
         }
       }
       
       const res = await fetch(url, { headers });
+      if (isIndianApi) {
+        // Fire-and-forget; never delay or fail a search because of usage
+        // tracking. Counts every attempt, including 429s.
+        void recordIndianApiRequest(res.status);
+      }
       
       if (!res.ok) {
         const errorBody = await res.text();
@@ -105,8 +110,10 @@ export async function GET(request: Request) {
 
   try {
     console.log(`Search request: q=${q}, source=${source}`);
-    // Default source if tickertape or unknown is provided
-    const effectiveSource = (!source || source === 'tickertape') ? 'default' : source;
+    // "tickertape" is the legacy value for the automatic source. "newapi"
+    // pointed at a dead Koyeb deployment, so treat it as automatic too.
+    const effectiveSource =
+      !source || source === 'tickertape' || source === 'newapi' ? 'default' : source;
     // 1. Check if query is an ISIN (12 characters, starts with IN)
     const isIsin = /^IN[A-Z0-9]{10}$/i.test(q);
     let isinQuotes: any[] = [];
@@ -154,7 +161,7 @@ export async function GET(request: Request) {
 
     // 1. Search Mutual Funds (mfapi.in as primary for MFs)
     let mfQuotes: any[] = [];
-    if (effectiveSource !== 'yahoo' && effectiveSource !== 'indianapi' && effectiveSource !== 'newapi') {
+    if (effectiveSource !== 'yahoo' && effectiveSource !== 'indianapi') {
       // Smart MF Search Logic using cached full list
       const allMfs = await getFullMfList();
       
@@ -224,9 +231,12 @@ export async function GET(request: Request) {
     }
 
     // 2. Tickertape Search (Removed)
-    let tickertapeQuotes: any[] = [];
 
-    // 3. Search Stocks (IndianAPI as backup)
+    // 3. Search Stocks
+    // Auto and Yahoo-only go straight to Yahoo in step 4. IndianAPI is only
+    // called when explicitly selected, because its free plan allows just
+    // 500 requests/month and Auto's old IndianAPI result was overwritten by
+    // Yahoo anyway.
     let stockQuotes: any[] = [];
     
     if (effectiveSource === 'indianapi') {
@@ -243,75 +253,27 @@ export async function GET(request: Request) {
         }
         return [];
       }, STOCK_KEYS, 'query');
-    } else if (effectiveSource === 'newapi') {
-      stockQuotes = await fetchWithFailover(NEW_STOCK_APIS, q, (data) => {
-        console.log('NewAPI response:', data);
-        const results = Array.isArray(data) ? data : (data.results || data.data || []);
-        if (Array.isArray(results)) {
-          return results.map(s => ({
-            symbol: s.symbol || s.ticker,
-            shortname: s.shortname || s.name,
-            longname: s.longname || s.name,
-            quoteType: 'EQUITY',
-            source: 'KoyebAPI'
-          }));
-        }
-        return [];
-      }, STOCK_KEYS, 'query');
-    } else if (effectiveSource === 'yahoo') {
-      // Handled in step 4
-    } else if (effectiveSource === 'default') {
-      // Fallback for generic search
-      stockQuotes = await fetchWithFailover(STOCK_APIS, q, (data) => {
-        const results = Array.isArray(data) ? data : (data.results || data.data || []);
-        if (Array.isArray(results)) {
-          return results.map(s => ({
-            symbol: s.symbol || s.ticker,
-            shortname: s.shortname || s.name,
-            longname: s.longname || s.name,
-            quoteType: 'EQUITY',
-            source: 'IndianAPI'
-          }));
-        }
-        return [];
-      }, STOCK_KEYS, 'query');
     }
 
-    // 4. Search Yahoo Finance as a final fallback
-    if (stockQuotes.length === 0 || effectiveSource === 'yahoo' || effectiveSource === 'default') {
+    // 4. Search Yahoo Finance (primary for Auto, fallback for IndianAPI)
+    if (stockQuotes.length === 0 || effectiveSource === 'yahoo') {
       try {
-        // If the query doesn't explicitly mention NSE, BSE, .NS, or .BO, bias towards NSE
-        const isIndian = q.toLowerCase().includes('nse') || 
-                         q.toLowerCase().includes('bse') || 
-                         q.toLowerCase().includes('.ns') || 
-                         q.toLowerCase().includes('.bo');
-        
-        // Check if it looks like a crypto or US stock
-        const isCryptoOrUS = q.includes('-') || /^[A-Z]{1,5}$/.test(q.toUpperCase());
-        
-        const searchQ = (isIndian || isCryptoOrUS) ? q : `${q} NSE`;
-        
-        console.log('Searching Yahoo Finance via direct fetch for:', searchQ);
-        const yahooRes = await fetch(`https://query2.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(searchQ)}&quotesCount=6&newsCount=0`, {
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-            'Accept': 'application/json'
-          }
-        });
-        
-        if (yahooRes.ok) {
-          const yahooData = await yahooRes.json();
-          stockQuotes = (yahooData.quotes || []).map((q: any) => ({
-            symbol: q.symbol,
-            shortname: q.shortname,
-            longname: q.longname,
-            quoteType: q.quoteType,
-            source: 'Yahoo Finance'
-          }));
-          console.log('Yahoo Finance direct fetch successful.');
-        } else {
-          console.error(`Yahoo direct fetch failed with status: ${yahooRes.status}`);
-        }
+        // Yahoo's search works best without a forced exchange suffix. The old
+        // code appended " NSE", which made queries like "reliance" return zero
+        // results. Strip an NSE/BSE token if the user typed one, then search.
+        const searchQ =
+          q.replace(/\b(nse|bse)\s*:?\s*/gi, '').replace(/\s+/g, ' ').trim() || q;
+
+        console.log('Searching Yahoo Finance for:', searchQ);
+        const yahooData = await yahoo.search(searchQ, { quotesCount: 6, newsCount: 0 });
+        stockQuotes = (yahooData?.quotes || []).map((quote: any) => ({
+          symbol: quote.symbol,
+          shortname: quote.shortname,
+          longname: quote.longname,
+          quoteType: quote.quoteType,
+          source: 'Yahoo Finance'
+        }));
+        console.log('Yahoo Finance search successful.');
       } catch (e: any) {
         console.error('Yahoo Finance search error:', e.message || e);
       }
@@ -319,8 +281,6 @@ export async function GET(request: Request) {
 
     // Interleave stockQuotes and mfQuotes for a better mixed result.
     let combined: any[] = [];
-    const maxStocks = stockQuotes.length > 0 ? 5 : 0;
-    const maxMfs = mfQuotes.length > 0 ? 5 : 0;
     
     combined = [
       ...stockQuotes.slice(0, 3), 
@@ -347,7 +307,7 @@ export async function GET(request: Request) {
         shortname: 'Axis Small Cap Fund Direct-Growth',
         longname: 'Axis Small Cap Fund Direct-Growth',
         quoteType: 'MUTUALFUND',
-        source: 'Tickertape'
+        source: 'MFAPI'
       });
     }
 
@@ -357,7 +317,7 @@ export async function GET(request: Request) {
         shortname: 'Zerodha Nifty LargeMidcap 250 Index Fund Direct Growth',
         longname: 'Zerodha Nifty LargeMidcap 250 Index Fund Direct Growth',
         quoteType: 'MUTUALFUND',
-        source: 'Tickertape'
+        source: 'MFAPI'
       });
     }
 
@@ -419,7 +379,7 @@ export async function GET(request: Request) {
         shortname: 'Edelweiss Small Cap Fund - Direct Plan - Growth',
         longname: 'Edelweiss Small Cap Fund - Direct Plan - Growth',
         quoteType: 'MUTUALFUND',
-        source: 'Tickertape'
+        source: 'MFAPI'
       });
       combined.unshift({
         symbol: '0P0001BA2H.BO',

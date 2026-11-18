@@ -21,7 +21,7 @@ export default function DeleteConfirmModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-      <div className="bg-white dark:bg-zinc-900 rounded-2xl shadow-xl w-full max-w-sm overflow-hidden border border-zinc-200 dark:border-zinc-800">
+      <div className="bg-white dark:bg-zinc-900 rounded-xl shadow-2xl w-full max-w-sm overflow-hidden border border-zinc-200 dark:border-zinc-800">
         <div className="p-5">
           <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">Delete Asset</h2>
           <p className="text-zinc-600 dark:text-zinc-400 mt-2">

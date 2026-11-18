@@ -2,6 +2,7 @@ import React from 'react';
 import { Search, X } from 'lucide-react';
 import { getConvertedPrice, guessCurrency } from '@/lib/portfolio-utils';
 import { Asset } from '@/lib/types';
+import IndianApiUsage from '@/components/IndianApiUsage';
 
 interface AddAssetModalProps {
   isAddModalOpen: boolean;
@@ -12,6 +13,7 @@ interface AddAssetModalProps {
   setSearchQuery: (val: string) => void;
   searchResults: any[];
   setSearchResults: (val: any[]) => void;
+  searchSource: 'indianapi' | 'yahoo' | 'tickertape';
   selectedResult: any | null;
   setSelectedResult: (val: any | null) => void;
   isSearching: boolean;
@@ -44,6 +46,7 @@ export default function AddAssetModal({
   setSearchQuery,
   searchResults,
   setSearchResults,
+  searchSource,
   selectedResult,
   setSelectedResult,
   isSearching,
@@ -70,7 +73,7 @@ export default function AddAssetModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-      <div className="bg-white dark:bg-zinc-900 rounded-2xl shadow-xl w-full max-w-md overflow-hidden flex flex-col max-h-[90vh] border border-zinc-200 dark:border-zinc-800">
+      <div className="bg-white dark:bg-zinc-900 rounded-xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[90vh] border border-zinc-200 dark:border-zinc-800">
         <div className="p-5 border-b border-zinc-200 dark:border-zinc-800 flex justify-between items-center">
           <h2 className="text-xl font-semibold text-zinc-900 dark:text-zinc-100">
             {editingAssetId ? 'Update Asset' : 'Add Asset'}
@@ -147,6 +150,8 @@ export default function AddAssetModal({
               </ul>
             )}
           </div>
+
+          {searchSource === 'indianapi' && <IndianApiUsage compact />}
 
           {selectedResult && (
             <div className="p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800/50 rounded-xl">

@@ -35,13 +35,13 @@ export default function LoginPage({
   handleResetPassword,
 }: LoginPageProps) {
   return (
-    <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950 flex items-center justify-center p-4">
-      <div className="bg-white dark:bg-zinc-900 p-8 rounded-3xl shadow-xl max-w-md w-full text-center border border-zinc-200 dark:border-zinc-800">
-        <div className="w-16 h-16 bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 rounded-2xl flex items-center justify-center mx-auto mb-6">
-          <PieChartIcon className="w-8 h-8" />
+    <div className="flex min-h-screen items-center justify-center bg-zinc-50 p-4 dark:bg-zinc-950">
+      <div className="w-full max-w-md rounded-2xl border border-zinc-200 bg-white p-8 text-center shadow-lg dark:border-zinc-800 dark:bg-zinc-900">
+        <div className="mx-auto mb-6 flex h-14 w-14 items-center justify-center rounded-xl bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-400">
+          <PieChartIcon className="h-7 w-7" />
         </div>
-        <h1 className="text-2xl font-bold text-zinc-900 dark:text-zinc-100 mb-2">Asset Allocation Tracker</h1>
-        <p className="text-zinc-500 dark:text-zinc-400 mb-6">Sign in to manage your assets, analyze your allocation, and get AI-powered insights.</p>
+        <h1 className="mb-1.5 text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-100">Asset Allocation Tracker</h1>
+        <p className="mb-6 text-sm text-zinc-500 dark:text-zinc-400">Sign in to manage your assets, analyze allocation and get AI-powered insights.</p>
         
         <form onSubmit={isResetMode ? handleResetPassword : handleEmailAuth} className="space-y-4 mb-6">
           <div className="space-y-1 text-left">
@@ -52,7 +52,7 @@ export default function LoginPage({
               onChange={(e) => setEmailAuthInput(e.target.value)}
               placeholder="you@example.com"
               required
-              className="w-full bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-xl px-4 py-3 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 transition-all text-zinc-900 dark:text-zinc-100"
+              className="w-full bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg px-3.5 py-2.5 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 transition-all text-zinc-900 dark:text-zinc-100"
             />
           </div>
           
@@ -66,7 +66,7 @@ export default function LoginPage({
                 placeholder="••••••••"
                 required={!isResetMode}
                 minLength={6}
-                className="w-full bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-xl px-4 py-3 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 transition-all text-zinc-900 dark:text-zinc-100"
+                className="w-full bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg px-3.5 py-2.5 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 transition-all text-zinc-900 dark:text-zinc-100"
               />
             </div>
           )}
@@ -80,7 +80,7 @@ export default function LoginPage({
           <button
             type="submit"
             disabled={isSigningIn}
-            className="w-full bg-blue-600 hover:bg-blue-700 text-white rounded-xl px-4 py-3 font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
+            className="w-full bg-blue-600 hover:bg-blue-700 text-white rounded-lg px-3.5 py-2.5 font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
           >
             {isSigningIn ? 'Processing...' : (isResetMode ? 'Send Reset Link' : (isEmailLoginMode ? 'Sign In with Email' : 'Create Account'))}
           </button>
@@ -119,7 +119,7 @@ export default function LoginPage({
           onClick={handleSignIn}
           disabled={isSigningIn}
           type="button"
-          className="w-full flex items-center justify-center gap-3 bg-white dark:bg-zinc-800 border border-zinc-300 dark:border-zinc-700 text-zinc-700 dark:text-zinc-300 px-6 py-3 rounded-xl font-medium hover:bg-zinc-50 dark:hover:bg-zinc-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed mb-4"
+          className="mb-4 flex w-full items-center justify-center gap-3 rounded-lg border border-zinc-300 bg-white px-5 py-2.5 font-medium text-zinc-700 transition-colors hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
         >
           {isSigningIn ? (
             <div className="w-5 h-5 border-2 border-zinc-500 border-t-transparent rounded-full animate-spin" />

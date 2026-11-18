@@ -1,12 +1,13 @@
 import React from 'react';
 import { X, RefreshCw } from 'lucide-react';
 import { Asset } from '@/lib/types';
+import IndianApiUsage from '@/components/IndianApiUsage';
 
 interface SettingsModalProps {
   isSettingsOpen: boolean;
   setIsSettingsOpen: (val: boolean) => void;
-  searchSource: 'indianapi' | 'yahoo' | 'newapi' | 'tickertape';
-  setSearchSource: (val: 'indianapi' | 'yahoo' | 'newapi' | 'tickertape') => void;
+  searchSource: 'indianapi' | 'yahoo' | 'tickertape';
+  setSearchSource: (val: 'indianapi' | 'yahoo' | 'tickertape') => void;
   aiProvider: 'openrouter' | 'google';
   setAiProvider: (val: 'openrouter' | 'google') => void;
   openRouterKey: string;
@@ -53,7 +54,7 @@ export default function SettingsModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-      <div className="bg-white dark:bg-zinc-900 rounded-2xl shadow-xl w-full max-w-md overflow-hidden flex flex-col border border-zinc-200 dark:border-zinc-800">
+      <div className="bg-white dark:bg-zinc-900 rounded-xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col border border-zinc-200 dark:border-zinc-800">
         <div className="p-5 border-b border-zinc-200 dark:border-zinc-800 flex justify-between items-center">
           <h2 className="text-xl font-semibold text-zinc-900 dark:text-zinc-100">Settings</h2>
           <button onClick={() => setIsSettingsOpen(false)} className="text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 transition-colors">
@@ -66,17 +67,17 @@ export default function SettingsModal({
             <select
               value={searchSource}
               onChange={(e) => {
-                const val = e.target.value as 'indianapi' | 'yahoo' | 'newapi' | 'tickertape';
+                const val = e.target.value as 'indianapi' | 'yahoo' | 'tickertape';
                 setSearchSource(val);
                 syncToDb({ settings: { searchSource: val } });
               }}
               className="w-full px-4 py-2.5 border border-zinc-300 dark:border-zinc-700 rounded-xl bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 focus:ring-2 focus:ring-blue-500 outline-none transition-shadow appearance-none"
             >
-              <option value="tickertape">Tickertape (Recommended)</option>
-              <option value="indianapi">IndianAPI</option>
-              <option value="yahoo">Yahoo Finance</option>
-              <option value="newapi">New API (GitHub)</option>
+              <option value="tickertape">Auto — Mutual Funds + Yahoo (Recommended)</option>
+              <option value="indianapi">IndianAPI (Yahoo fallback)</option>
+              <option value="yahoo">Yahoo Finance only</option>
             </select>
+            <IndianApiUsage />
           </div>
 
           <div>
@@ -226,10 +227,10 @@ export default function SettingsModal({
               className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 rounded-xl font-medium hover:bg-zinc-800 dark:hover:bg-zinc-200 transition-colors disabled:opacity-50"
             >
               <RefreshCw className={`w-4 h-4 ${isLoadingPrices ? 'animate-spin' : ''}`} />
-              <span>Full Refresh (Sync with Tickertape)</span>
+              <span>Full Refresh (All Sources)</span>
             </button>
             <p className="text-[10px] text-zinc-500 mt-2 text-center">
-              This will force a re-fetch of all asset data from Tickertape and other sources, bypassing cached data.
+              This will force a re-fetch of all asset data from all configured sources, bypassing cached data.
             </p>
           </div>
         </div>

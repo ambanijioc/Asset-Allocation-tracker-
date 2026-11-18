@@ -4,59 +4,32 @@ import YahooFinance from 'yahoo-finance2';
 
 const yahoo = new YahooFinance();
 
+// Use the yahoo-finance2 client for quotes. Yahoo's raw v7/quote endpoint
+// currently returns 401 unless a crumb/cookie is supplied, while the client
+// handles that handshake for us. GC=F / SI=F supply the gold and silver prices.
 const safeQuote = async (symbol: string) => {
   try {
-    const res = await fetch(`https://query1.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(symbol)}`, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-        'Accept': 'application/json'
-      }
-    });
-    if (!res.ok) throw new Error(`Yahoo direct fetch failed: ${res.status}`);
-    const data = await res.json();
-    const result = data?.quoteResponse?.result?.[0];
-    if (!result) return null;
-    return result;
+    return await yahoo.quote(symbol);
   } catch (e) {
-    console.error(`Error in direct Yahoo fetch for ${symbol}:`, e);
+    console.error(`Error in Yahoo quote for ${symbol}:`, e);
     return null;
   }
 };
 
 const safeQuoteSummary = async (symbol: string, options: any) => {
   try {
-    const modules = options.modules.join(',');
-    const res = await fetch(`https://query1.finance.yahoo.com/v10/finance/quoteSummary/${encodeURIComponent(symbol)}?modules=${modules}`, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-        'Accept': 'application/json'
-      }
-    });
-    if (!res.ok) throw new Error(`Yahoo summary fetch failed: ${res.status}`);
-    const data = await res.json();
-    const result = data?.quoteSummary?.result?.[0];
-    if (!result) return null;
-    return result;
+    return await yahoo.quoteSummary(symbol, options);
   } catch (e) {
-    console.error(`Error in direct Yahoo summary fetch for ${symbol}:`, e);
+    console.error(`Error in Yahoo summary for ${symbol}:`, e);
     return null;
   }
 };
 
 const safeSearch = async (query: string, options: any) => {
   try {
-    const count = options?.quotesCount || 10;
-    const res = await fetch(`https://query2.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(query)}&quotesCount=${count}&newsCount=0`, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Accept': 'application/json'
-      }
-    });
-    if (!res.ok) throw new Error(`Yahoo search fetch failed: ${res.status}`);
-    const data = await res.json();
-    return data || { quotes: [] };
+    return await yahoo.search(query, options);
   } catch (e) {
-    console.error(`Error in direct Yahoo search for ${query}:`, e);
+    console.error(`Error in Yahoo search for ${query}:`, e);
     return { quotes: [] };
   }
 };
@@ -96,23 +69,6 @@ const MANUAL_MAP: Record<string, string> = {
   '0P0000XW0K.BO': '102146', // Edelweiss Liquid Fund - Retail
   '0P0011MAX.BO': '120503',  // Axis Small Cap Fund
   'MF_101762': '118955',    // HDFC Flexi Cap Fund - Direct Growth
-};
-
-const getMetalPrice = async (metal: string, currency: string = 'INR') => {
-  if (!process.env.METALS_API_KEY) return null;
-  try {
-    const res = await fetch(`https://api.metals.dev/v1/latest?api_key=${process.env.METALS_API_KEY}&currency=${currency}&metals=${metal}`);
-    if (res.ok) {
-      const data = await res.json();
-      if (data.metals && data.metals[metal]) {
-        let price = parseFloat(data.metals[metal]);
-        return price;
-      }
-    }
-  } catch (e) {
-    console.error(`Failed to fetch metal price for ${metal}`, e);
-  }
-  return null;
 };
 
 
@@ -220,7 +176,7 @@ export async function GET(request: Request) {
       const isGoldOrSilver = d.symbol === 'GOLD-INR-GRAM' || d.symbol === 'SILVER-INR-GRAM';
       const isMF = d.symbol.startsWith('0P') || /^\d+$/.test(d.symbol) || d.symbol.startsWith('MF_') || /^INF[A-Z0-9]{9}$/i.test(d.symbol);
       const isPriceMissing = d.regularMarketPrice === null;
-      const isMarketCapMissing = isNaN(d.marketCap);
+      const isMarketCapMissing = !isGoldOrSilver && isNaN(d.marketCap);
       const isYahooSymbolMissing = isMF && !d.yahooSymbol;
       const isSectorMissing = !isMF && !d.sector;
       
@@ -243,6 +199,8 @@ export async function GET(request: Request) {
     // 4. Append or update symbols
     if (symbolsToUpdate.length > 0) {
       const getGFinanceSymbol = (sym: string) => {
+        if (sym === 'GOLD-INR-GRAM') return 'GC=F';
+        if (sym === 'SILVER-INR-GRAM') return 'SI=F';
         if (sym === 'INR=X') return 'CURRENCY:USDINR';
         if (sym.endsWith('=X')) {
           return `CURRENCY:USD${sym.replace('=X', '')}`;
@@ -290,51 +248,35 @@ export async function GET(request: Request) {
           }
 
           try {
-            const metalKey = sym === 'GOLD-INR-GRAM' ? 'gold' : 'silver';
-            
-             // Fetch real metals data (USD per troy ounce futures: GC=F for Gold, SI=F for Silver)
-             // We use the exact calculation from USD/troy ounce to INR/gram, using the INR=X exchange rate.
-             let priceUsd = await getMetalPrice(metalKey, 'USD');
-             let source = '';
+            // Use USD-per-troy-ounce futures: GC=F for gold, SI=F for silver.
+            // Yahoo quotes in USD/oz, so convert to INR per gram below.
+            const ySym = sym === 'GOLD-INR-GRAM' ? 'GC=F' : 'SI=F';
+            const quote = await safeQuote(ySym) as any;
+            const priceUsd = quote?.regularMarketPrice;
 
-             const ySym = sym === 'GOLD-INR-GRAM' ? 'GC=F' : 'SI=F';
-             if (priceUsd) {
-               source = 'Metals API';
-             } else {
-               const quote = await safeQuote(ySym) as any;
-               if (quote && quote.regularMarketPrice) {
-                 priceUsd = quote.regularMarketPrice;
-                 source = 'Yahoo Finance';
-               }
-             }
+            if (priceUsd) {
+              // 1 Troy Ounce = 31.1034768 grams
+              const troyOunceInGrams = 31.1034768;
 
-             if (priceUsd) {
-               // 1 Troy Ounce = 31.1034768 grams
-               const troyOunceInGrams = 31.1034768;
-               
-               // Fetch standard USD to INR rate, fallback to 94.22 if unavailable
-               const usdToInr = existingData['INR=X']?.regularMarketPrice || 94.22;
+              // Fetch standard USD to INR rate, fallback to 94.22 if unavailable
+              const usdToInr = existingData['INR=X']?.regularMarketPrice || 94.22;
 
-               // Base conversion: (USD / Troy Ounce) -> (USD / Gram) -> (INR / Gram)
-               let finalInrPrice = (priceUsd / troyOunceInGrams) * usdToInr;
-                
-               // Import Duty (15%: 10% BCD + 5% AIDC, effective May 2026) + GST (3%)
-               const importDutyRate = 0.15;
-               const gstRate = 0.03;
-               if (sym === 'GOLD-INR-GRAM') {
-                 finalInrPrice *= (1 + importDutyRate) * (1 + gstRate);
-               } else if (sym === 'SILVER-INR-GRAM') {
-                 finalInrPrice *= (1 + importDutyRate) * (1 + gstRate);
-               }
-               
-               mfPrices[sym] = {
-                 price: finalInrPrice,
-                 name: sym === 'GOLD-INR-GRAM' ? 'Physical Gold 24K (Per Gram)' : 'Physical Silver (Per Gram)',
-                 yahooSymbol: ySym,
-                 sector: 'Precious Metals',
-                 source: source
-               };
-             }
+              // Base conversion: (USD / Troy Ounce) -> (USD / Gram) -> (INR / Gram)
+              let finalInrPrice = (priceUsd / troyOunceInGrams) * usdToInr;
+
+              // Import Duty (15%: 10% BCD + 5% AIDC, effective May 2026) + GST (3%)
+              const importDutyRate = 0.15;
+              const gstRate = 0.03;
+              finalInrPrice *= (1 + importDutyRate) * (1 + gstRate);
+
+              mfPrices[sym] = {
+                price: finalInrPrice,
+                name: sym === 'GOLD-INR-GRAM' ? 'Physical Gold 24K (Per Gram)' : 'Physical Silver (Per Gram)',
+                yahooSymbol: ySym,
+                sector: 'Precious Metals',
+                source: 'Yahoo Finance'
+              };
+            }
           } catch(e) {
             console.error(`Failed to fetch ${sym} price`, e);
           }
@@ -342,7 +284,7 @@ export async function GET(request: Request) {
         }
 
         const lookupSym = MANUAL_MAP[sym] || sym;
-        const isMF = lookupSym.startsWith('0P') || /^\d+$/.test(lookupSym) || lookupSym.startsWith('MF_') || /^INF[A-Z0-9]{9}$/i.test(lookupSym) || lookupSym === 'GOLD-INR-GRAM';
+        const isMF = lookupSym.startsWith('0P') || /^\d+$/.test(lookupSym) || lookupSym.startsWith('MF_') || /^INF[A-Z0-9]{9}$/i.test(lookupSym) || lookupSym === 'GOLD-INR-GRAM' || lookupSym === 'SILVER-INR-GRAM';
         
         // If it's a Mutual Fund, prioritize MFAPI
         if (isMF) {
@@ -596,8 +538,9 @@ export async function GET(request: Request) {
         if (rowIndex >= 0) {
           const gSym = getGFinanceSymbol(sym);
           const rowNumber = rowIndex + 1;
-          const isMF = sym.startsWith('0P') || /^\d+$/.test(sym) || sym.startsWith('MF_') || /^INF[A-Z0-9]{9}$/i.test(sym) || sym === 'GOLD-INR-GRAM';
-          const isIndian = sym.endsWith('.NS') || sym.endsWith('.BO') || sym === 'GOLD-INR-GRAM';
+          const isCommodity = sym === 'GOLD-INR-GRAM' || sym === 'SILVER-INR-GRAM';
+          const isMF = sym.startsWith('0P') || /^\d+$/.test(sym) || sym.startsWith('MF_') || /^INF[A-Z0-9]{9}$/i.test(sym) || isCommodity;
+          const isIndian = sym.endsWith('.NS') || sym.endsWith('.BO') || isCommodity;
           const isUsdAsset = sym.endsWith('-USD') || (!sym.includes('.') && !isMF);
           
           let priceFormula = gSym.startsWith('CURRENCY:') ? `=IFNA(GOOGLEFINANCE("${gSym}"), "")` : `=IFNA(GOOGLEFINANCE("${gSym}", "price"), "")`;
@@ -624,13 +567,19 @@ export async function GET(request: Request) {
           else if (isUsdAsset) currencyFormula = `USD`;
 
           const actualType = stockPrices[sym]?.quoteType || existingData[sym]?.quoteType || (isMF ? "MUTUALFUND" : "EQUITY");
-          const typeFormula = sym === "GOLD-INR-GRAM" ? "COMMODITY" : (actualType === "ETF" ? "ETF" : (isMF ? "MUTUALFUND" : "EQUITY"));
-          if (sym === 'GOLD-INR-GRAM') sector = 'Precious Metals';
+          const typeFormula = isCommodity ? "COMMODITY" : (actualType === "ETF" ? "ETF" : (isMF ? "MUTUALFUND" : "EQUITY"));
+          if (isCommodity) sector = 'Precious Metals';
           
           const fallbackMarketCap = stockPrices[sym]?.marketCap ? stockPrices[sym].marketCap : '""';
+          // Commodities are priced per gram in INR, so Google Finance has no
+          // meaningful market cap for them.
+          const marketCapFormula = isCommodity
+            ? ''
+            : `=IFNA(GOOGLEFINANCE("${gSym}", "marketcap"), ${fallbackMarketCap})`;
           
-          // Skip updating the sheet if the symbol is a mutual fund and the value has not changed
-          if (isMF && existingData[sym] && existingData[sym].regularMarketPrice === parseFloat(priceFormula)) {
+          // Skip updating the sheet if the symbol is a mutual fund and the value has not changed.
+          // Commodities are always written so their type/sector metadata gets corrected.
+          if (isMF && !isCommodity && existingData[sym] && existingData[sym].regularMarketPrice === parseFloat(priceFormula)) {
             // Price hasn't drifted, no need to write to sheet
             continue;
           }
@@ -643,7 +592,7 @@ export async function GET(request: Request) {
               nameFormula,
               currencyFormula,
               typeFormula,
-              `=IFNA(GOOGLEFINANCE("${gSym}", "marketcap"), ${fallbackMarketCap})`,
+              marketCapFormula,
               yahooSymbol,
               sector,
               source
@@ -671,8 +620,9 @@ export async function GET(request: Request) {
       if (missingSymbols.length > 0) {
         const appendData = missingSymbols.map(sym => {
           const gSym = getGFinanceSymbol(sym);
-          const isMF = sym.startsWith('0P') || /^\d+$/.test(sym) || sym.startsWith('MF_') || /^INF[A-Z0-9]{9}$/i.test(sym) || sym === 'GOLD-INR-GRAM';
-          const isIndian = sym.endsWith('.NS') || sym.endsWith('.BO') || sym === 'GOLD-INR-GRAM';
+          const isCommodity = sym === 'GOLD-INR-GRAM' || sym === 'SILVER-INR-GRAM';
+          const isMF = sym.startsWith('0P') || /^\d+$/.test(sym) || sym.startsWith('MF_') || /^INF[A-Z0-9]{9}$/i.test(sym) || isCommodity;
+          const isIndian = sym.endsWith('.NS') || sym.endsWith('.BO') || isCommodity;
           const isUsdAsset = sym.endsWith('-USD') || (!sym.includes('.') && !isMF);
           
           let priceFormula = gSym.startsWith('CURRENCY:') ? `=IFNA(GOOGLEFINANCE("${gSym}"), "")` : `=IFNA(GOOGLEFINANCE("${gSym}", "price"), "")`;
@@ -698,10 +648,13 @@ export async function GET(request: Request) {
           else if (isUsdAsset) currencyFormula = `USD`;
 
           const actualType = stockPrices[sym]?.quoteType || existingData[sym]?.quoteType || (isMF ? "MUTUALFUND" : "EQUITY");
-          const typeFormula = sym === "GOLD-INR-GRAM" ? "COMMODITY" : (actualType === "ETF" ? "ETF" : (isMF ? "MUTUALFUND" : "EQUITY"));
-          if (sym === 'GOLD-INR-GRAM') sector = 'Precious Metals';
+          const typeFormula = isCommodity ? "COMMODITY" : (actualType === "ETF" ? "ETF" : (isMF ? "MUTUALFUND" : "EQUITY"));
+          if (isCommodity) sector = 'Precious Metals';
           
           const fallbackMarketCap = stockPrices[sym]?.marketCap ? stockPrices[sym].marketCap : '""';
+          const marketCapFormula = isCommodity
+            ? ''
+            : `=IFNA(GOOGLEFINANCE("${gSym}", "marketcap"), ${fallbackMarketCap})`;
           
           return [
             sym,
@@ -709,7 +662,7 @@ export async function GET(request: Request) {
             nameFormula,
             currencyFormula,
             typeFormula,
-            `=IFNA(GOOGLEFINANCE("${gSym}", "marketcap"), ${fallbackMarketCap})`,
+            marketCapFormula,
             yahooSymbol,
             sector,
             source
@@ -730,8 +683,9 @@ export async function GET(request: Request) {
       }
 
       symbolsToUpdate.forEach(sym => {
-        const isMF = sym.startsWith('0P') || /^\d+$/.test(sym) || sym.startsWith('MF_') || /^INF[A-Z0-9]{9}$/i.test(sym) || sym === 'GOLD-INR-GRAM';
-        const isIndian = sym.endsWith('.NS') || sym.endsWith('.BO') || sym === 'GOLD-INR-GRAM';
+        const isCommodity = sym === 'GOLD-INR-GRAM' || sym === 'SILVER-INR-GRAM';
+        const isMF = sym.startsWith('0P') || /^\d+$/.test(sym) || sym.startsWith('MF_') || /^INF[A-Z0-9]{9}$/i.test(sym) || isCommodity;
+        const isIndian = sym.endsWith('.NS') || sym.endsWith('.BO') || isCommodity;
         
         let source = existingData[sym]?.source || "";
         if (isMF && mfPrices[sym]) {

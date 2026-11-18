@@ -4,6 +4,12 @@ import { doc, setDoc, updateDoc, onSnapshot, getDoc } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '@/lib/firebase';
 import { Asset, PriceData } from '@/lib/types';
 
+type SearchSource = 'indianapi' | 'yahoo' | 'tickertape';
+
+/** "newapi" pointed at a dead service; fold it (and unknown values) into Auto. */
+const normalizeSearchSource = (value: unknown): SearchSource =>
+  value === 'indianapi' || value === 'yahoo' ? value : 'tickertape';
+
 export function usePortfolioData(
   user: User | null,
   isAuthReady: boolean
@@ -26,7 +32,7 @@ export function usePortfolioData(
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [restoreStatus, setRestoreStatus] = useState<{message: string, isError: boolean} | null>(null);
   const [aiProvider, setAiProvider] = useState<'openrouter' | 'google'>('google');
-  const [searchSource, setSearchSource] = useState<'indianapi' | 'yahoo' | 'newapi' | 'tickertape'>('tickertape');
+  const [searchSource, setSearchSource] = useState<SearchSource>('tickertape');
   const [availableModels, setAvailableModels] = useState<any[]>([]);
   const [selectedModel, setSelectedModel] = useState('meta-llama/llama-3.3-70b-instruct:free');
   const [googleModel, setGoogleModel] = useState('gemini-3.1-flash-lite-preview');
@@ -159,7 +165,7 @@ export function usePortfolioData(
         if (importedData.fundHoldings) setFundHoldings(importedData.fundHoldings);
         if (importedData.settings) {
           if (importedData.settings.idealAllocation) setIdealAllocation(importedData.settings.idealAllocation);
-          if (importedData.settings.searchSource) setSearchSource(importedData.settings.searchSource);
+          if (importedData.settings.searchSource) setSearchSource(normalizeSearchSource(importedData.settings.searchSource));
           if (importedData.settings.aiProvider) setAiProvider(importedData.settings.aiProvider);
           if (importedData.settings.openrouterModel) setSelectedModel(importedData.settings.openrouterModel);
           if (importedData.settings.googleModel) setGoogleModel(importedData.settings.googleModel);
@@ -198,7 +204,7 @@ export function usePortfolioData(
         }
         if (importedData.settings) {
           if (importedData.settings.idealAllocation) setIdealAllocation(importedData.settings.idealAllocation);
-          if (importedData.settings.searchSource) setSearchSource(importedData.settings.searchSource);
+          if (importedData.settings.searchSource) setSearchSource(normalizeSearchSource(importedData.settings.searchSource));
           if (importedData.settings.aiProvider) setAiProvider(importedData.settings.aiProvider);
           if (importedData.settings.openrouterModel) setSelectedModel(importedData.settings.openrouterModel);
           if (importedData.settings.googleModel) setGoogleModel(importedData.settings.googleModel);
@@ -210,7 +216,9 @@ export function usePortfolioData(
           fundHoldings: importedData.fundHoldings || fundHoldings,
           settings: {
             idealAllocation: importedData.settings?.idealAllocation || idealAllocation,
-            searchSource: importedData.settings?.searchSource || searchSource,
+            searchSource: importedData.settings?.searchSource
+              ? normalizeSearchSource(importedData.settings.searchSource)
+              : searchSource,
             aiProvider: importedData.settings?.aiProvider || aiProvider,
             openrouterModel: importedData.settings?.openrouterModel || selectedModel,
             googleModel: importedData.settings?.googleModel || googleModel
@@ -376,7 +384,13 @@ export function usePortfolioData(
             }
             setIdealAllocation(loadedAllocation);
           }
-          if (data.settings.searchSource) setSearchSource(data.settings.searchSource);
+          if (data.settings.searchSource) {
+            const normalizedSource = normalizeSearchSource(data.settings.searchSource);
+            setSearchSource(normalizedSource);
+            if (normalizedSource !== data.settings.searchSource) {
+              syncToDb({ settings: { searchSource: normalizedSource } });
+            }
+          }
           if (data.settings.openRouterKey) setOpenRouterKey(data.settings.openRouterKey);
           if (data.settings.aiProvider) setAiProvider(data.settings.aiProvider);
           if (data.settings.googleModel) {

@@ -7,6 +7,8 @@ export type Asset = {
   manualPrice?: number;
   manualSector?: string;
   purchaseDate?: string;
+  /** Last quote returned by an exchange integration (USD unless currency says otherwise). */
+  currentPrice?: number;
   currency: string;
   type: string;
   categoryPath?: string[];

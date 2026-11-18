@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Search, Filter, ArrowUpDown, ExternalLink, Loader2, Plus } from 'lucide-react';
+import { Search, ArrowUpDown, ExternalLink, Loader2, Plus } from 'lucide-react';
 
 type ScreenerResult = {
   sid: string;
@@ -123,64 +123,61 @@ export default function Screener({ onAdd }: ScreenerProps) {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <div>
-          <h2 className="text-2xl font-bold text-zinc-900 dark:text-white flex items-center gap-2">
-            <Filter className="w-6 h-6 text-blue-500" />
-            Stock Screener
-          </h2>
-          <p className="text-zinc-500 dark:text-zinc-400 text-sm">
-            Discover stocks using advanced filters powered by Tickertape
+          <h2 className="text-sm font-semibold tracking-tight text-zinc-900 dark:text-white">Stock Screener</h2>
+          <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
+            Filter Indian equities by sector, market cap, valuation and dividend yield
           </p>
         </div>
         <button 
           onClick={fetchResults}
           disabled={loading}
-          className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors disabled:opacity-50"
+          className="inline-flex h-9 items-center gap-1.5 self-start rounded-lg border border-zinc-200 bg-white px-3 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-50 disabled:opacity-50 md:self-auto dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
         >
           {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
-          Refresh Results
+          Refresh results
         </button>
       </div>
 
       {/* Filters */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 p-4 bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm">
-        <div className="space-y-2">
-          <label className="text-xs font-medium text-zinc-500 uppercase tracking-wider">Sector</label>
+      <div className="grid grid-cols-1 gap-4 rounded-xl border border-zinc-200 bg-white p-4 shadow-xs dark:border-zinc-800 dark:bg-zinc-900 md:grid-cols-4">
+        <div className="space-y-1.5">
+          <label className="text-[11px] font-medium uppercase tracking-wider text-zinc-500 dark:text-zinc-400">Sector</label>
           <select 
             value={filters.sector}
             onChange={(e) => setFilters(f => ({ ...f, sector: e.target.value }))}
-            className="w-full p-2 bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg text-sm outline-none focus:ring-2 focus:ring-blue-500/20"
+            className="h-9 w-full rounded-lg border border-zinc-200 bg-zinc-50 px-2.5 text-sm text-zinc-900 outline-none transition-colors hover:border-zinc-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
           >
             {SECTORS.map(s => <option key={s} value={s}>{s}</option>)}
           </select>
         </div>
 
-        <div className="space-y-2">
-          <label className="text-xs font-medium text-zinc-500 uppercase tracking-wider">Market Cap</label>
+        <div className="space-y-1.5">
+          <label className="text-[11px] font-medium uppercase tracking-wider text-zinc-500 dark:text-zinc-400">Market Cap</label>
           <select 
             value={filters.minMarketCap}
             onChange={(e) => setFilters(f => ({ ...f, minMarketCap: Number(e.target.value) }))}
-            className="w-full p-2 bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg text-sm outline-none focus:ring-2 focus:ring-blue-500/20"
+            className="h-9 w-full rounded-lg border border-zinc-200 bg-zinc-50 px-2.5 text-sm text-zinc-900 outline-none transition-colors hover:border-zinc-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
           >
             {MARKET_CAPS.map(m => <option key={m.label} value={m.val}>{m.label}</option>)}
           </select>
         </div>
 
-        <div className="space-y-2">
-          <label className="text-xs font-medium text-zinc-500 uppercase tracking-wider">Max PE Ratio ({filters.maxPE})</label>
+        <div className="space-y-1.5">
+          <label className="text-[11px] font-medium uppercase tracking-wider text-zinc-500 dark:text-zinc-400">Max PE ratio ({filters.maxPE})</label>
           <input 
             type="range" 
             min="0" 
             max="100" 
             value={filters.maxPE}
             onChange={(e) => setFilters(f => ({ ...f, maxPE: Number(e.target.value) }))}
-            className="w-full h-2 bg-zinc-200 dark:bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-blue-600"
+            className="h-9 w-full cursor-pointer accent-blue-600"
           />
         </div>
 
-        <div className="space-y-2">
-          <label className="text-xs font-medium text-zinc-500 uppercase tracking-wider">Min Div Yield ({filters.minDivYield}%)</label>
+        <div className="space-y-1.5">
+          <label className="text-[11px] font-medium uppercase tracking-wider text-zinc-500 dark:text-zinc-400">Min div. yield ({filters.minDivYield}%)</label>
           <input 
             type="range" 
             min="0" 
@@ -188,26 +185,26 @@ export default function Screener({ onAdd }: ScreenerProps) {
             step="0.5"
             value={filters.minDivYield}
             onChange={(e) => setFilters(f => ({ ...f, minDivYield: Number(e.target.value) }))}
-            className="w-full h-2 bg-zinc-200 dark:bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-blue-600"
+            className="h-9 w-full cursor-pointer accent-blue-600"
           />
         </div>
       </div>
 
       {/* Results Table */}
-      <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse">
-            <thead>
-              <tr className="bg-zinc-50 dark:bg-zinc-800/50 border-b border-zinc-200 dark:border-zinc-800">
-                <th className="p-4 text-xs font-bold text-zinc-500 uppercase tracking-wider">Stock</th>
-                <th className="p-4 text-xs font-bold text-zinc-500 uppercase tracking-wider cursor-pointer hover:text-blue-500 transition-colors" onClick={() => setSort({ key: 'marketCap', order: sort.order * -1 })}>
-                  Market Cap <ArrowUpDown className="w-3 h-3 inline ml-1" />
+      <div className="overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-xs dark:border-zinc-800 dark:bg-zinc-900">
+        <div className="max-h-[70vh] overflow-auto">
+          <table className="w-full min-w-[720px] border-collapse text-left">
+            <thead className="sticky top-0 z-10 bg-zinc-50/95 text-[11px] font-semibold uppercase tracking-wider text-zinc-500 backdrop-blur dark:bg-zinc-950/90 dark:text-zinc-400">
+              <tr className="border-b border-zinc-200 dark:border-zinc-800">
+                <th className="px-5 py-3">Stock</th>
+                <th className="cursor-pointer px-5 py-3 text-right transition-colors hover:text-zinc-900 dark:hover:text-zinc-100" onClick={() => setSort({ key: 'marketCap', order: sort.order * -1 })}>
+                  Market Cap <ArrowUpDown className="ml-1 inline h-3 w-3" />
                 </th>
-                <th className="p-4 text-xs font-bold text-zinc-500 uppercase tracking-wider cursor-pointer hover:text-blue-500 transition-colors" onClick={() => setSort({ key: 'peRatio', order: sort.order * -1 })}>
-                  PE Ratio <ArrowUpDown className="w-3 h-3 inline ml-1" />
+                <th className="cursor-pointer px-5 py-3 text-right transition-colors hover:text-zinc-900 dark:hover:text-zinc-100" onClick={() => setSort({ key: 'peRatio', order: sort.order * -1 })}>
+                  PE Ratio <ArrowUpDown className="ml-1 inline h-3 w-3" />
                 </th>
-                <th className="p-4 text-xs font-bold text-zinc-500 uppercase tracking-wider">Div Yield</th>
-                <th className="p-4 text-xs font-bold text-zinc-500 uppercase tracking-wider">Actions</th>
+                <th className="px-5 py-3 text-right">Div Yield</th>
+                <th className="px-5 py-3 text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
@@ -220,38 +217,38 @@ export default function Screener({ onAdd }: ScreenerProps) {
                     transition={{ delay: idx * 0.02 }}
                     className="hover:bg-zinc-50 dark:hover:bg-zinc-800/30 transition-colors group"
                   >
-                    <td className="p-4">
+                    <td className="px-5 py-3">
                       <div className="flex flex-col">
-                        <span className="font-bold text-zinc-900 dark:text-white group-hover:text-blue-500 transition-colors">{stock.ticker}</span>
-                        <span className="text-xs text-zinc-500 dark:text-zinc-400 truncate max-w-[150px]">{stock.name}</span>
-                        <span className="text-[10px] text-zinc-400 dark:text-zinc-500 mt-1">{stock.sector}</span>
+                        <span className="font-semibold text-zinc-900 transition-colors group-hover:text-blue-600 dark:text-white dark:group-hover:text-blue-400">{stock.ticker}</span>
+                        <span className="max-w-[220px] truncate text-xs text-zinc-500 dark:text-zinc-400">{stock.name}</span>
+                        <span className="mt-0.5 text-[10px] text-zinc-400 dark:text-zinc-500">{stock.sector}</span>
                       </div>
                     </td>
-                    <td className="p-4 text-zinc-600 dark:text-zinc-300">
+                    <td className="px-5 py-3 text-right text-sm tabular-nums text-zinc-600 dark:text-zinc-300">
                       {formatMarketCap(stock.marketCap)}
                     </td>
-                    <td className="p-4 text-zinc-600 dark:text-zinc-300">
+                    <td className="px-5 py-3 text-right text-sm tabular-nums text-zinc-600 dark:text-zinc-300">
                       {stock.peRatio ? stock.peRatio.toFixed(2) : '-'}
                     </td>
-                    <td className="p-4 text-zinc-600 dark:text-zinc-300">
+                    <td className="px-5 py-3 text-right text-sm tabular-nums text-zinc-600 dark:text-zinc-300">
                       {stock.divYield ? `${stock.divYield.toFixed(2)}%` : '-'}
                     </td>
-                    <td className="p-4">
-                      <div className="flex items-center gap-2">
+                    <td className="px-5 py-3">
+                      <div className="flex items-center justify-end gap-1">
                         <button 
                           onClick={() => onAdd(stock.ticker)}
-                          className="p-2 text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-500/10 rounded-lg transition-colors"
+                          className="rounded-md p-1.5 text-blue-600 transition-colors hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-500/10"
                           title="Add to Portfolio"
                         >
-                          <Plus className="w-4 h-4" />
+                          <Plus className="h-4 w-4" />
                         </button>
                         <a 
                           href={`https://www.tickertape.in/stocks/${stock.name.toLowerCase().replace(/ /g, '-')}-${stock.ticker}`}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="p-2 text-zinc-400 hover:text-blue-500 transition-colors inline-block"
+                          className="inline-block rounded-md p-1.5 text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
                         >
-                          <ExternalLink className="w-4 h-4" />
+                          <ExternalLink className="h-4 w-4" />
                         </a>
                       </div>
                     </td>

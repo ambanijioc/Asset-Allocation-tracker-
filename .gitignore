@@ -19,3 +19,4 @@ bun.lock
 plan/
 patch_*.js
 *.pid
+__pycache__/

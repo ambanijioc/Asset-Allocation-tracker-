@@ -17,7 +17,7 @@ interface UseAiChatParams {
   selectedModel: string;
   googleModel: string;
   availableModels: any[];
-  searchSource: 'indianapi' | 'yahoo' | 'newapi' | 'tickertape';
+  searchSource: 'indianapi' | 'yahoo' | 'tickertape';
   setIsAddModalOpen: React.Dispatch<React.SetStateAction<boolean>>;
   setIsSettingsOpen: React.Dispatch<React.SetStateAction<boolean>>;
 }
@@ -65,8 +65,9 @@ export function useAiChat({
     setChatMessages([{ role: 'assistant', content: 'Hi! I can help you manage your portfolio. Try saying "Add 10 shares of Apple at $150" or "Remove Reliance".' }]);
   };
 
-  const callOpenRouter = async (messages: any[], tools: any[]) => {
-    if (aiProvider === 'google') {
+  const callOpenRouter = async (messages: any[], tools: any[], providerOverride?: 'openrouter' | 'google') => {
+    const provider = providerOverride || aiProvider;
+    if (provider === 'google') {
       const apiKey = process.env.NEXT_PUBLIC_GEMINI_API_KEY;
       if (!apiKey) {
         throw new Error('Gemini API key is not available in this environment. Please try using OpenRouter instead.');
@@ -328,6 +329,27 @@ export function useAiChat({
     }
   };
 
+  // Gemini's free tier can be disabled per Google Cloud project. If an
+  // OpenRouter key is configured, fall back to it instead of failing the chat.
+  const callAi = async (messages: any[], tools: any[]) => {
+    try {
+      return await callOpenRouter(messages, tools);
+    } catch (error: any) {
+      const message = error?.message || String(error);
+      const unavailable = /free tier|PERMISSION_DENIED|403/i.test(message);
+      if (aiProvider === 'google' && unavailable) {
+        if (openRouterKey) {
+          console.warn('Gemini is unavailable; falling back to OpenRouter:', message);
+          return callOpenRouter(messages, tools, 'openrouter');
+        }
+        throw new Error(
+          'Gemini generation is unavailable for this project (the free tier is disabled). Add billing to the Google Cloud project, or add an OpenRouter key in Settings to use another provider.',
+        );
+      }
+      throw error;
+    }
+  };
+
   const handleAiCommand = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!aiInput.trim()) return;
@@ -539,7 +561,7 @@ export function useAiChat({
         Current portfolio symbols: ${assets.map(a => a.symbol).join(', ')}` 
       };
       
-      let response = await callOpenRouter([systemPrompt, ...currentMessages], tools);
+      let response = await callAi([systemPrompt, ...currentMessages], tools);
       if (!response.choices || response.choices.length === 0) {
         throw new Error(response.error?.message || 'The AI model returned an empty response. It might be overloaded or unavailable.');
       }
@@ -759,7 +781,7 @@ export function useAiChat({
         currentMessages.push(...toolResponses);
         setChatMessages(prev => [...prev, toolCallMessage, ...toolResponses]);
         
-        response = await callOpenRouter([systemPrompt, ...currentMessages], tools);
+        response = await callAi([systemPrompt, ...currentMessages], tools);
         if (!response.choices || response.choices.length === 0) {
           throw new Error(response.error?.message || 'The AI model returned an empty response. It might be overloaded or unavailable.');
         }

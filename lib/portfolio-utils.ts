@@ -103,6 +103,61 @@ export const formatCompact = (val: number) => {
   return `₹${val.toFixed(0)}`;
 };
 
+const STABLECOIN_BASES = new Set([
+  'USDT',
+  'USDC',
+  'BUSD',
+  'FDUSD',
+  'TUSD',
+  'DAI',
+  'USDP',
+  'PYUSD',
+  'USDD',
+  'GUSD',
+]);
+
+export type ExchangeAssetInput = Partial<Asset> & {
+  currentPrice?: number;
+  exchange?: string;
+};
+
+/**
+ * Exchange integrations historically emitted pairs such as `BTC/USDT` and
+ * `USDT/USDT`. Normalize those to the same `-USD` convention used by manually
+ * saved crypto so the two sources merge into one holding and share price keys.
+ *
+ * Fiat balances (CoinDCX INR) are cash, not crypto. Stablecoins are quoted at
+ * their peg because markets such as `USDT/USDT` do not exist.
+ */
+export function normalizeExchangeAsset(raw: ExchangeAssetInput, exchangeName?: string): Asset {
+  const rawSymbol = typeof raw.symbol === 'string' ? raw.symbol : '';
+  const base = (rawSymbol.split(/[\/-]/)[0] || raw.name || '').toUpperCase();
+  const isInr = base === 'INR';
+  const isStablecoin = STABLECOIN_BASES.has(base);
+  const reportedPrice = Number(raw.currentPrice);
+  const currentPrice = isInr || isStablecoin
+    ? 1
+    : Number.isFinite(reportedPrice) && reportedPrice > 0
+      ? reportedPrice
+      : 0;
+  const exchange = raw.exchange || exchangeName || 'Exchange';
+
+  return {
+    ...raw,
+    id: raw.id || `${exchange.toLowerCase()}-${base}`,
+    symbol: isInr ? 'INR' : `${base}-USD`,
+    name: raw.name || base,
+    quantity: Number(raw.quantity) || 0,
+    type: isInr ? 'CASH' : 'CRYPTO',
+    currency: isInr ? 'INR' : 'USD',
+    currentPrice,
+    // Exchanges do not provide cost basis. Using the first-seen price keeps
+    // P&L neutral instead of reporting the entire value as profit.
+    entryPrice: Number(raw.entryPrice) > 0 ? Number(raw.entryPrice) : currentPrice,
+    exchange,
+  };
+}
+
 export const getBaseCryptoSymbol = (symbol: string) => {
   if (typeof symbol === 'string' && symbol.includes('-')) {
     const parts = symbol.split('-');
