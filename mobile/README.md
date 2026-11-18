@@ -56,15 +56,15 @@ app/                      routes only
   (tabs)/                 Dashboard · Insights · Allocation · Assets · Screener · Settings
   asset/new.tsx           add holding (modal)
   asset/[id]/             detail + edit (modal)
-  assistant.tsx           read-only AI chat (modal)
-  ai-keys.tsx             Groq key manager (modal)
+  assistant.tsx           read-only AI chat + model picker (modal)
+  ai-keys.tsx             multi-provider key manager (modal)
   login.tsx               email/password, Google + demo entry
 src/
   components/ui/          design-system primitives
   components/charts/      SVG visualisations
   components/portfolio/   composed portfolio widgets
   components/portfolio/insights/  exposure, fund, matrix and drift panels
-  features/assistant/     chat loop + portfolio tool executors
+  features/assistant/     chat loop, model picker + portfolio tool executors
   features/auth/          Firebase + session provider
   features/portfolio/     types, API, queries, aggregation, form, analytics
   lib/api/                typed fetch client with timeouts
@@ -105,9 +105,10 @@ The **Assistant** modal (opened from the dashboard header or the "Ask the
 assistant" card) runs a tool-calling loop against the backend proxy at
 `/api/agent`:
 
-1. the app sends the conversation and its Firebase ID token;
-2. the server verifies the token, picks a Groq key from the pool and adds the
-   tool schemas;
+1. the app sends the conversation, the selected provider/model and its Firebase
+   ID token;
+2. the server verifies the token, picks a key for that provider from the pool
+   and adds the tool schemas;
 3. the model asks for portfolio data (`get_portfolio_summary`,
    `get_exposure_summary`, `search_asset`, `get_quote`,
    `get_fund_holdings`);
@@ -115,31 +116,42 @@ assistant" card) runs a tool-calling loop against the backend proxy at
    existing `/api/search`, `/api/price` and `/api/holdings` endpoints;
 5. the results go back to the model until it produces a final answer.
 
+The chat header has an OpenCode-style model picker. It calls
+`/api/agent/models`, which only returns providers that have a usable key and
+fetches each provider's current model catalogue. The last choice is persisted on
+the device. Switching providers or models applies from the next message without
+resetting the conversation.
+
 The assistant is deliberately **read-only**. It cannot add, edit or delete
 assets, and it never forces a price refresh (which would write to the Google
 Sheet). Write tools should be added behind an explicit confirmation sheet.
 
-Keys live on the server, never in the app bundle. There are two ways to add
-them:
+Groq, OpenRouter and Gemini keys live on the server, never in the app bundle.
+There are two ways to add them:
 
-1. **In the app** — Settings → AI assistant → **API keys**. Keys are validated
-   against Groq, stored in MongoDB under the signed-in user's uid, and shown
-   only as masked values (`gsk_abc…wxyz`). Up to 10 per account.
-2. **In the server environment** — comma-separated in `GROQ_API_KEYS`, with
-   `GROQ_API_KEY` still supported as a single-key fallback:
+1. **In the app** — Settings → AI assistant → **API keys**. Paste a key and the
+   provider is detected from its prefix (`gsk_`, `sk-or-v1-`, `AIza`). The key is
+   validated with that provider, stored in MongoDB under the signed-in user's
+   uid, and shown only as a masked value. Up to 10 per account.
+2. **In the server environment** — comma-separated per provider:
 
 ```bash
 # web repo .env.local
 GROQ_API_KEYS=gsk_key_one,gsk_key_two
-GROQ_API_KEY=gsk_...
+OPENROUTER_API_KEYS=sk-or-v1-...
+GEMINI_API_KEYS=AIza...
 FIREBASE_PROJECT_ID=liquid-muse-491818-a9
 ```
 
-`/api/agent` prefers the signed-in user's own keys, then the server pool. It
-uses the least-recently-used key first, rotates through the rest, and puts a
-key on cooldown when Groq returns 429/401/403/5xx before trying the next one.
-The mobile key screen calls `/api/agent/keys` (GET/POST/DELETE), which is
-backed by the `user_ai_keys` MongoDB collection.
+`GROQ_API_KEY`, `OPENROUTER_API_KEY` and the existing
+`NEXT_PUBLIC_GEMINI_API_KEY` are also accepted as single-key fallbacks.
+
+`/api/agent` prefers the signed-in user's own keys for the selected provider,
+then the server pool for that provider. It uses the least-recently-used key
+first, rotates through the rest, and puts a key on cooldown when the provider
+returns 429/401/403/5xx before trying the next one. The mobile key screen calls
+`/api/agent/keys` (GET/POST/DELETE), which is backed by the `user_ai_keys`
+MongoDB collection; older documents without a provider are treated as Groq keys.
 
 `lib/firebase-auth.ts` verifies Firebase RS256 ID tokens against Google's
 public keys, so the proxy cannot be used anonymously in production. Local

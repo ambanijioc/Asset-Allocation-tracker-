@@ -14,7 +14,12 @@ services:
         sync: false
       - key: NEXT_PUBLIC_GEMINI_API_KEY
         sync: false
-      # Optional shared Groq key pool (comma-separated). Users can also add
-      # their own keys in Settings → AI assistant.
+      # Optional shared AI key pools (comma-separated). Users can also add
+      # their own keys in Settings → AI assistant. Configure any provider you
+      # want the chat model picker to expose.
       - key: GROQ_API_KEYS
+        sync: false
+      - key: OPENROUTER_API_KEYS
+        sync: false
+      - key: GEMINI_API_KEYS
         sync: false

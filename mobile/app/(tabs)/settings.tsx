@@ -320,7 +320,7 @@ export default function SettingsScreen() {
               <Text style={[type.caption, { color: colors.muted }]} numberOfLines={1}>
                 {isDemo
                   ? 'Sign in to manage keys'
-                  : 'Add multiple Groq keys for fallback'}
+                  : 'Groq, OpenRouter and Gemini · pick a model in chat'}
               </Text>
             </View>
             <Feather name="chevron-right" size={18} color={colors.muted} />

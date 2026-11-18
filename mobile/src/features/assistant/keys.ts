@@ -1,5 +1,7 @@
 import { apiFetch } from '@/src/lib/api/client';
 
+import type { AssistantProviderId } from './models';
+
 export type AiKeySource = 'account' | 'environment';
 
 export interface AiKeyEntry {
@@ -7,6 +9,7 @@ export interface AiKeyEntry {
   label: string;
   masked: string;
   source: AiKeySource;
+  provider: AssistantProviderId;
   createdAt: string | null;
   lastUsedAt: string | null;
   status: 'active' | 'cooling';

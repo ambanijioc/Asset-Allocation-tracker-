@@ -24,6 +24,7 @@ import { Skeleton } from '@/src/components/ui/Skeleton';
 import { ErrorState } from '@/src/components/ui/States';
 import { TextField } from '@/src/components/ui/TextField';
 import type { AiKeyEntry } from '@/src/features/assistant/keys';
+import { PROVIDER_LABELS } from '@/src/features/assistant/models';
 import { useAiKeys } from '@/src/features/assistant/useAiKeys';
 import { useAuth } from '@/src/features/auth/AuthProvider';
 import { radius, space, type } from '@/src/lib/theme/tokens';
@@ -73,7 +74,7 @@ export default function AiKeysScreen() {
       setKeyInput('');
       setLabel('');
       setNotice(
-        `${response.key.label} added. The assistant will rotate to it automatically.`,
+        `${response.key.label} added. ${PROVIDER_LABELS[response.key.provider]} models now appear in the chat model picker.`,
       );
     } catch (error) {
       setFormError(
@@ -124,7 +125,7 @@ export default function AiKeysScreen() {
         <ScreenHeader
           eyebrow="AI ASSISTANT"
           title="API keys"
-          subtitle="Multiple Groq keys, rotated automatically"
+          subtitle="Groq, OpenRouter and Gemini keys, rotated per provider"
           action={
             <IconButton
               icon="x"
@@ -186,7 +187,8 @@ export default function AiKeysScreen() {
                 </View>
                 <Text style={[type.title, { color: colors.text }]}>No keys yet</Text>
                 <Text style={[type.caption, styles.emptyText, { color: colors.muted }]}>
-                  Add your first Groq key below. It is checked with Groq before it is saved.
+                  Add a Groq, OpenRouter or Gemini key below. It is checked with the
+                  provider before it is saved.
                 </Text>
               </Card>
             ) : (
@@ -228,7 +230,7 @@ export default function AiKeysScreen() {
                           {entry.label}
                         </Text>
                         <Text style={[type.caption, { color: colors.muted }]}>
-                          {entry.masked}
+                          {PROVIDER_LABELS[entry.provider]} · {entry.masked}
                         </Text>
                       </View>
                       <Badge
@@ -272,14 +274,14 @@ export default function AiKeysScreen() {
           <View>
             <SectionHeader
               title="Add a key"
-              subtitle="Create one at console.groq.com/keys"
+              subtitle="Groq, OpenRouter or Gemini — detected automatically"
             />
             <Card style={styles.form}>
               <TextField
-                label="Groq API key"
+                label="API key"
                 value={keyInput}
                 onChangeText={setKeyInput}
-                placeholder="gsk_…"
+                placeholder="gsk_…, sk-or-v1-… or AIza…"
                 icon="key"
                 autoCapitalize="none"
                 autoCorrect={false}
@@ -320,8 +322,10 @@ export default function AiKeysScreen() {
           </View>
 
           <Text style={[styles.footer, { color: colors.muted }]}>
-            The assistant uses the least-recently-used key first. If Groq rate-limits
-            or rejects a key, it cools down and the next key is tried automatically.
+            The assistant uses the least-recently-used key for the provider you pick
+            in chat. If that provider rate-limits or rejects a key, it cools down and
+            the next key is tried automatically. Models are listed from each provider
+            in the chat header.
           </Text>
         </View>
       </Screen>

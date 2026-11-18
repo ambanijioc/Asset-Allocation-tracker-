@@ -9,13 +9,22 @@ import {
   markKeyUsed,
   orderAgentKeys,
   type AgentKey,
-} from '@/lib/groq-keys';
+} from '@/lib/ai-keys';
+import {
+  chatHeaders,
+  chatRequestBody,
+  defaultModelFor,
+  isAiProviderId,
+  modelIsAvailable,
+  providerDefinition,
+  providerErrorMessage,
+  sanitizeModelId,
+  type AiProviderId,
+} from '@/lib/ai-providers';
 
 export const runtime = 'nodejs';
 
-const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions';
-const DEFAULT_MODEL = 'openai/gpt-oss-120b';
-const ALLOWED_MODELS = new Set(['openai/gpt-oss-120b', 'openai/gpt-oss-20b']);
+const DEFAULT_PROVIDER: AiProviderId = 'groq';
 const MAX_MESSAGES = 40;
 const MAX_BODY_BYTES = 120_000;
 
@@ -129,7 +138,20 @@ type SanitizedMessage = {
   tool_calls?: unknown[];
   tool_call_id?: string;
   name?: string;
+  extra_content?: unknown;
+  reasoning_details?: unknown;
 };
+
+function sanitizeExtra(value: unknown): unknown {
+  if (!value || typeof value !== 'object') return undefined;
+  try {
+    const serialized = JSON.stringify(value);
+    if (serialized.length > 8_000) return undefined;
+    return JSON.parse(serialized);
+  } catch {
+    return undefined;
+  }
+}
 
 function sanitizeMessages(input: unknown): SanitizedMessage[] {
   if (!Array.isArray(input)) return [];
@@ -155,7 +177,7 @@ function sanitizeMessages(input: unknown): SanitizedMessage[] {
     if (Array.isArray(item.tool_calls)) {
       message.tool_calls = item.tool_calls.slice(0, 4).map((call: any, index: number) => {
         const args = call?.function?.arguments;
-        return {
+        const sanitizedCall: Record<string, unknown> = {
           id: String(call?.id || `call_${index}`),
           type: 'function',
           function: {
@@ -164,6 +186,11 @@ function sanitizeMessages(input: unknown): SanitizedMessage[] {
               typeof args === 'string' ? args.slice(0, 4000) : JSON.stringify(args ?? {}),
           },
         };
+        const extraContent = sanitizeExtra(call?.extra_content);
+        if (extraContent) sanitizedCall.extra_content = extraContent;
+        const reasoningDetails = sanitizeExtra(call?.reasoning_details);
+        if (reasoningDetails) sanitizedCall.reasoning_details = reasoningDetails;
+        return sanitizedCall;
       });
     }
 
@@ -173,6 +200,13 @@ function sanitizeMessages(input: unknown): SanitizedMessage[] {
     if (typeof item.name === 'string') {
       message.name = item.name.slice(0, 100);
     }
+
+    // Gemini returns thought signatures in `extra_content`; OpenRouter returns
+    // reasoning details. They must round-trip for multi-turn tool calls.
+    const extraContent = sanitizeExtra(item.extra_content);
+    if (extraContent) message.extra_content = extraContent;
+    const reasoningDetails = sanitizeExtra(item.reasoning_details);
+    if (reasoningDetails) message.reasoning_details = reasoningDetails;
 
     messages.push(message);
   }
@@ -209,12 +243,15 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Send at least one message.' }, { status: 400 });
   }
 
-  const requestedModel = typeof body?.model === 'string' ? body.model : '';
-  const model = ALLOWED_MODELS.has(requestedModel) ? requestedModel : DEFAULT_MODEL;
+  const provider: AiProviderId = isAiProviderId(body?.provider)
+    ? body.provider
+    : DEFAULT_PROVIDER;
+  const definition = providerDefinition(provider);
+  const model = sanitizeModelId(body?.model) || defaultModelFor(provider);
 
   let pool: AgentKey[] = [];
   try {
-    pool = await getAgentKeyPool(uid);
+    pool = await getAgentKeyPool(uid, provider);
   } catch (error: any) {
     console.error('[AGENT] Could not load the key pool:', error?.message || error);
     return NextResponse.json(
@@ -226,20 +263,30 @@ export async function POST(request: Request) {
   if (pool.length === 0) {
     return NextResponse.json(
       {
-        error:
-          'The assistant has no AI key yet. Add one in Settings → AI assistant, or set GROQ_API_KEYS on the server.',
+        error: `No ${definition.name} key is configured. Add one in Settings → AI assistant, or set ${definition.envKeyNames[0]} on the server.`,
       },
       { status: 503 },
     );
   }
 
-  const providerBody = JSON.stringify({
-    model,
-    messages: [{ role: 'system', content: systemPrompt() }, ...messages],
-    tools: TOOLS,
-    tool_choice: 'auto',
-    max_completion_tokens: 1600,
-  });
+  const discoveryKey = orderAgentKeys(pool).find((key) => agentKeyCooldownRemaining(key) === 0);
+  if (discoveryKey && !(await modelIsAvailable(provider, model, discoveryKey.key))) {
+    return NextResponse.json(
+      {
+        error: `The selected model is not available on ${definition.name}. Pick another model from the chat header.`,
+      },
+      { status: 400 },
+    );
+  }
+
+  const providerBody = JSON.stringify(
+    chatRequestBody(
+      provider,
+      model,
+      [{ role: 'system', content: systemPrompt() }, ...messages],
+      TOOLS,
+    ),
+  );
 
   // Stay inside the mobile client's 60s timeout even with several keys.
   const deadline = Date.now() + 55_000;
@@ -248,6 +295,7 @@ export async function POST(request: Request) {
   let sawAuthFailure = false;
   let sawTimeout = false;
   let lastStatus = 0;
+  let lastProviderMessage = '';
 
   for (const key of orderAgentKeys(pool)) {
     if (agentKeyCooldownRemaining(key) > 0) continue;
@@ -259,12 +307,9 @@ export async function POST(request: Request) {
     markKeyUsed(uid, key);
 
     try {
-      const response = await fetch(GROQ_URL, {
+      const response = await fetch(definition.chatUrl, {
         method: 'POST',
-        headers: {
-          Authorization: `Bearer ${key.key}`,
-          'Content-Type': 'application/json',
-        },
+        headers: chatHeaders(provider, key.key),
         body: providerBody,
         signal: AbortSignal.timeout(Math.min(30_000, remaining)),
         cache: 'no-store',
@@ -279,13 +324,14 @@ export async function POST(request: Request) {
       }
 
       if (!response.ok) {
-        const providerMessage = payload?.error?.message || payload?.error || text.slice(0, 200);
+        const providerMessage = providerErrorMessage(payload, text);
         console.warn(
-          `[AGENT] Groq key ${key.id} failed (${response.status}):`,
-          String(providerMessage).slice(0, 200),
+          `[AGENT] ${definition.name} key ${key.id} failed (${response.status}):`,
+          providerMessage.slice(0, 200),
         );
-        markKeyFailure(uid, key, response.status, String(providerMessage));
+        markKeyFailure(uid, key, response.status, providerMessage);
         lastStatus = response.status;
+        lastProviderMessage = providerMessage.slice(0, 300);
 
         if (response.status === 429) sawRateLimit = true;
         if (response.status === 401 || response.status === 403) sawAuthFailure = true;
@@ -298,11 +344,36 @@ export async function POST(request: Request) {
           response.status >= 500;
         if (retryable) continue;
 
-        if (response.status === 400) {
+        const messageText = String(providerMessage).toLowerCase();
+        if (messageText.includes('guardrail') || messageText.includes('data policy')) {
           return NextResponse.json(
             {
               error:
-                'The assistant could not process that request. Try a shorter or simpler question.',
+                'This free OpenRouter model requires data logging. Enable it in OpenRouter privacy settings, or pick another model from the chat header.',
+            },
+            { status: 400 },
+          );
+        }
+        if (response.status === 402 || messageText.includes('requires more credits')) {
+          return NextResponse.json(
+            {
+              error: `The selected ${definition.name} model needs credits. Pick a free model or another provider from the chat header.`,
+            },
+            { status: 400 },
+          );
+        }
+        if (response.status === 400 || response.status === 404 || response.status === 422) {
+          const modelProblem =
+            messageText.includes('tool') ||
+            messageText.includes('function') ||
+            messageText.includes('not found') ||
+            messageText.includes('does not exist') ||
+            messageText.includes('not supported');
+          return NextResponse.json(
+            {
+              error: modelProblem
+                ? `The selected ${definition.name} model cannot handle this request. Pick a different model from the chat header.`
+                : 'The assistant could not process that request. Try a shorter or simpler question.',
             },
             { status: 400 },
           );
@@ -324,6 +395,7 @@ export async function POST(request: Request) {
 
       return NextResponse.json({
         message,
+        provider,
         model: payload?.model || model,
         usage: payload?.usage ?? null,
       });
@@ -331,7 +403,7 @@ export async function POST(request: Request) {
       const timedOut = error?.name === 'TimeoutError' || error?.name === 'AbortError';
       if (timedOut) sawTimeout = true;
       console.warn(
-        `[AGENT] Groq key ${key.id} request failed:`,
+        `[AGENT] ${definition.name} key ${key.id} request failed:`,
         error?.message || error,
       );
       markKeyFailure(uid, key, timedOut ? 408 : 0, error?.message || 'network error');
@@ -341,8 +413,7 @@ export async function POST(request: Request) {
   if (attempts === 0) {
     return NextResponse.json(
       {
-        error:
-          'Every AI key is cooling down right now. Wait a minute, or add another key in Settings → AI assistant.',
+        error: `Every ${definition.name} key is cooling down right now. Wait a minute, or add another key in Settings → AI assistant.`,
       },
       { status: 429 },
     );
@@ -351,18 +422,24 @@ export async function POST(request: Request) {
   if (sawRateLimit) {
     return NextResponse.json(
       {
-        error:
-          'All AI keys are rate-limited right now. Wait a minute, or add another key in Settings → AI assistant.',
+        error: `All ${definition.name} keys are rate-limited right now. Wait a minute, or add another key in Settings → AI assistant.`,
       },
       { status: 429 },
     );
   }
 
   if (sawAuthFailure && !sawTimeout) {
+    // A 403 is not always a bad key: Gemini, for example, returns one when the
+    // project has no billing or API access enabled. Surface that explanation
+    // instead of telling the user to replace a perfectly valid key.
+    const accessProblem = /billing|free tier|quota|permission|not available|not enabled/i.test(
+      lastProviderMessage,
+    );
     return NextResponse.json(
       {
-        error:
-          'Groq rejected every key it tried. Check the key in Settings → AI assistant, or add another one.',
+        error: accessProblem
+          ? `${definition.name} could not use this key: ${lastProviderMessage}`
+          : `${definition.name} rejected every key it tried. Check the key in Settings → AI assistant, or add another one.`,
       },
       { status: 502 },
     );

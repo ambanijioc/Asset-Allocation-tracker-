@@ -3,17 +3,17 @@ import { NextResponse } from 'next/server';
 import { resolveRequestUid } from '@/lib/agent-auth';
 import {
   MAX_USER_KEYS,
-  addStoredGroqKey,
-  deleteStoredGroqKey,
+  addStoredAiKey,
+  deleteStoredAiKey,
   listKeyEntries,
-  validateGroqKey,
-} from '@/lib/groq-keys';
-
+  providerForNewKey,
+  validateAiKey,
+} from '@/lib/ai-keys';
 export const runtime = 'nodejs';
 
 const MAX_BODY_BYTES = 4_096;
 
-// Adding a key costs one Groq validation call. Keep a small window so a
+// Adding a key costs one provider validation call. Keep a small window so a
 // signed-in client cannot hammer the provider through this endpoint.
 const KEY_OPS_LIMIT = 10;
 const KEY_OPS_WINDOW_MS = 10 * 60 * 1000;
@@ -73,11 +73,11 @@ export async function POST(request: Request) {
   const label = typeof body?.label === 'string' ? body.label : undefined;
 
   if (!key) {
-    return NextResponse.json({ error: 'Paste a Groq API key.' }, { status: 400 });
+    return NextResponse.json({ error: 'Paste an API key.' }, { status: 400 });
   }
-  if (!key.startsWith('gsk_') || key.length < 20) {
+  if (key.length < 20) {
     return NextResponse.json(
-      { error: 'That does not look like a Groq key. It starts with gsk_.' },
+      { error: 'That key looks too short. Copy the full key from the provider.' },
       { status: 400 },
     );
   }
@@ -85,13 +85,24 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'That key is too long.' }, { status: 400 });
   }
 
-  const validation = await validateGroqKey(key);
+  const provider = providerForNewKey(key, body?.provider);
+  if (!provider) {
+    return NextResponse.json(
+      {
+        error:
+          'That key was not recognised. Use a Groq (gsk_…), OpenRouter (sk-or-v1-…) or Gemini (AIza…) key.',
+      },
+      { status: 400 },
+    );
+  }
+
+  const validation = await validateAiKey(provider, key);
   if (!validation.ok) {
     return NextResponse.json({ error: validation.error }, { status: 400 });
   }
 
   try {
-    const result = await addStoredGroqKey(auth.uid, key, label);
+    const result = await addStoredAiKey(auth.uid, provider, key, label);
     if (!result.ok) {
       return NextResponse.json({ error: result.error }, { status: result.status });
     }
@@ -133,7 +144,7 @@ export async function DELETE(request: Request) {
   }
 
   try {
-    const deleted = await deleteStoredGroqKey(auth.uid, id);
+    const deleted = await deleteStoredAiKey(auth.uid, id);
     if (!deleted) {
       return NextResponse.json({ error: 'That key was not found.' }, { status: 404 });
     }

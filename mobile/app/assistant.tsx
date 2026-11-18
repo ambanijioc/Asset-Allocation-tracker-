@@ -1,4 +1,5 @@
 import { Feather } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -18,7 +19,16 @@ import { Banner } from '@/src/components/ui/Banner';
 import { IconButton } from '@/src/components/ui/IconButton';
 import { Screen } from '@/src/components/ui/Screen';
 import { ScreenHeader } from '@/src/components/ui/ScreenHeader';
+import { ModelPicker } from '@/src/features/assistant/ModelPicker';
+import {
+  loadAssistantSelection,
+  resolveSelection,
+  saveAssistantSelection,
+  selectionLabel,
+  type AssistantSelection,
+} from '@/src/features/assistant/selection';
 import { useAssistant, type AssistantChatMessage } from '@/src/features/assistant/useAssistant';
+import { useAssistantModels } from '@/src/features/assistant/useAssistantModels';
 import { useAuth } from '@/src/features/auth/AuthProvider';
 import { usePortfolioData } from '@/src/features/portfolio/queries';
 import { radius, space, type } from '@/src/lib/theme/tokens';
@@ -34,21 +44,77 @@ const SUGGESTIONS = [
 export default function AssistantScreen() {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
+  const router = useRouter();
   const { isDemo } = useAuth();
   const { summary, analytics, prices, fundHoldings, isLoading, error } = usePortfolioData();
 
   const [input, setInput] = useState('');
+  const [isPickerOpen, setIsPickerOpen] = useState(false);
+  const [savedSelection, setSavedSelection] = useState<AssistantSelection | null>(null);
+  const [selectionReady, setSelectionReady] = useState(false);
   const listRef = useRef<FlatList<AssistantChatMessage>>(null);
+
+  const modelsQuery = useAssistantModels();
+  const providers = modelsQuery.data?.providers ?? [];
+  const selection = useMemo(
+    () => resolveSelection(savedSelection, modelsQuery.data),
+    [savedSelection, modelsQuery.data],
+  );
+  const modelLabel = useMemo(
+    () => selectionLabel(selection, modelsQuery.data),
+    [selection, modelsQuery.data],
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    void loadAssistantSelection().then((saved) => {
+      if (cancelled) return;
+      setSavedSelection(saved);
+      setSelectionReady(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Persist the resolved default once the saved preference has loaded, so a
+  // default model is remembered for the next visit.
+  useEffect(() => {
+    if (!selectionReady || !selection) return;
+    if (
+      savedSelection?.provider === selection.provider &&
+      savedSelection?.model === selection.model
+    ) {
+      return;
+    }
+    saveAssistantSelection(selection);
+  }, [savedSelection, selection, selectionReady]);
 
   const context = useMemo(
     () => ({ summary, analytics, prices, fundHoldings }),
     [summary, analytics, prices, fundHoldings],
   );
 
-  const disabled = isDemo || isLoading;
-  const { messages, isSending, activity, send, reset } = useAssistant(context, { disabled });
+  const disabled = isDemo || isLoading || !selection;
+  const { messages, isSending, activity, send, reset } = useAssistant(context, {
+    disabled,
+    provider: selection?.provider,
+    model: selection?.model,
+  });
 
   const canSend = input.trim().length > 0 && !isSending && !disabled;
+
+  const chooseModel = (next: AssistantSelection) => {
+    setSavedSelection(next);
+    saveAssistantSelection(next);
+    setIsPickerOpen(false);
+  };
+
+  const modelButtonLabel = modelLabel
+    ? `${modelLabel.provider} · ${modelLabel.model}`
+    : modelsQuery.isLoading
+      ? 'Loading models…'
+      : 'Choose a model';
 
   useEffect(() => {
     if (messages.length === 0) return;
@@ -76,16 +142,40 @@ export default function AssistantScreen() {
             eyebrow="AI ASSISTANT"
             title="Ask your portfolio"
             subtitle="Read-only · live prices and fund look-through"
-            action={
-              messages.length > 0 ? (
+          />
+          {!isDemo ? (
+            <View style={styles.controls}>
+              <Pressable
+                onPress={() => setIsPickerOpen(true)}
+                accessibilityRole="button"
+                accessibilityLabel="Change AI model"
+                style={({ pressed }) => [
+                  styles.modelButton,
+                  { backgroundColor: colors.card, borderColor: colors.border },
+                  pressed && styles.pressed,
+                ]}
+              >
+                <Feather name="cpu" size={15} color={colors.accent} />
+                <View style={styles.modelButtonText}>
+                  <Text style={[type.label, { color: colors.muted }]}>Model</Text>
+                  <Text
+                    numberOfLines={1}
+                    style={[type.caption, { color: colors.text }]}
+                  >
+                    {modelButtonLabel}
+                  </Text>
+                </View>
+                <Feather name="chevron-down" size={15} color={colors.muted} />
+              </Pressable>
+              {messages.length > 0 ? (
                 <IconButton
                   icon="rotate-ccw"
                   onPress={reset}
                   accessibilityLabel="Start a new conversation"
                 />
-              ) : undefined
-            }
-          />
+              ) : null}
+            </View>
+          ) : null}
         </View>
 
         {isDemo ? (
@@ -94,6 +184,32 @@ export default function AssistantScreen() {
               tone="warning"
               icon="lock"
               message="Sign in with a real account to use the assistant. Demo mode stays read-only."
+            />
+          </View>
+        ) : null}
+
+        {!isDemo && !modelsQuery.isLoading && !selection ? (
+          <View style={styles.notice}>
+            <Banner
+              tone={modelsQuery.error ? 'error' : 'warning'}
+              icon={modelsQuery.error ? 'wifi-off' : 'key'}
+              message={
+                modelsQuery.error
+                  ? 'Could not load the available models. Check your connection and try again.'
+                  : providers.length > 0
+                    ? 'Your providers are configured, but their model lists could not be loaded. Retry or check the keys.'
+                    : 'No AI provider is connected. Add a Groq, OpenRouter or Gemini key to start chatting.'
+              }
+              actionLabel={
+                modelsQuery.error || providers.length > 0 ? 'Retry' : 'Add key'
+              }
+              onAction={() => {
+                if (modelsQuery.error || providers.length > 0) {
+                  void modelsQuery.refetch();
+                } else {
+                  router.push('/ai-keys');
+                }
+              }}
             />
           </View>
         ) : null}
@@ -183,7 +299,11 @@ export default function AssistantScreen() {
                 ? 'Loading your portfolio…'
                 : isDemo
                   ? 'Sign in to chat'
-                  : 'Ask about your portfolio…'
+                  : !selection
+                    ? modelsQuery.isLoading
+                      ? 'Loading models…'
+                      : 'Add an API key to chat'
+                    : 'Ask about your portfolio…'
             }
             placeholderTextColor={colors.muted}
             multiline
@@ -218,6 +338,31 @@ export default function AssistantScreen() {
           </Pressable>
         </View>
       </KeyboardAvoidingView>
+
+      <ModelPicker
+        visible={isPickerOpen}
+        providers={providers}
+        selection={selection}
+        loading={modelsQuery.isLoading}
+        error={
+          modelsQuery.data
+            ? null
+            : modelsQuery.error instanceof Error
+              ? modelsQuery.error.message
+              : modelsQuery.error
+                ? 'Could not load the available models.'
+                : null
+        }
+        onSelect={chooseModel}
+        onClose={() => setIsPickerOpen(false)}
+        onRetry={() => {
+          void modelsQuery.refetch();
+        }}
+        onManageKeys={() => {
+          setIsPickerOpen(false);
+          router.push('/ai-keys');
+        }}
+      />
     </Screen>
   );
 }
@@ -349,6 +494,24 @@ function TypingBubble({ label }: { label: string }) {
 const styles = StyleSheet.create({
   flex: { flex: 1 },
   header: { paddingHorizontal: space.lg },
+  controls: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.sm,
+    marginTop: -space.sm,
+    marginBottom: space.md,
+  },
+  modelButton: {
+    flex: 1,
+    minHeight: 44,
+    borderWidth: 1,
+    borderRadius: radius.md,
+    paddingHorizontal: space.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.sm,
+  },
+  modelButtonText: { flex: 1, gap: 1 },
   notice: { paddingHorizontal: space.lg, paddingBottom: space.sm },
   emptyContent: {
     flexGrow: 1,

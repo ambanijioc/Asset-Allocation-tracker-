@@ -34,7 +34,11 @@ function friendlyError(error: unknown): string {
 
 export function useAssistant(
   context: AssistantContext,
-  options: { disabled?: boolean } = {},
+  options: {
+    disabled?: boolean;
+    provider?: string;
+    model?: string;
+  } = {},
 ) {
   const { getToken, isDemo } = useAuth();
   const [messages, setMessages] = useState<AssistantChatMessage[]>([]);
@@ -52,7 +56,9 @@ export function useAssistant(
   const send = useCallback(
     async (text: string) => {
       const trimmed = text.trim();
-      if (!trimmed || isSending || isDemo || options.disabled) return;
+      const provider = options.provider;
+      const model = options.model;
+      if (!trimmed || !provider || !model || isSending || isDemo || options.disabled) return;
 
       const controller = new AbortController();
       controllerRef.current = controller;
@@ -73,11 +79,16 @@ export function useAssistant(
           const response = await sendAgentRequest(apiMessages.current, {
             token,
             signal: controller.signal,
+            provider,
+            model,
           });
           const message = response.message;
           const toolCalls = message.tool_calls ?? [];
 
+          // Keep provider-specific fields (Gemini thought signatures,
+          // OpenRouter reasoning details) so the next tool round is accepted.
           apiMessages.current.push({
+            ...message,
             role: 'assistant',
             content: message.content ?? null,
             ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
@@ -143,7 +154,7 @@ export function useAssistant(
         setIsSending(false);
       }
     },
-    [context, getToken, isDemo, isSending, options.disabled],
+    [context, getToken, isDemo, isSending, options.disabled, options.model, options.provider],
   );
 
   const reset = useCallback(() => {

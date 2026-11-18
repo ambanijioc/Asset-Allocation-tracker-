@@ -39,6 +39,7 @@ export function useAiKeys() {
           : previous,
       );
       void queryClient.invalidateQueries({ queryKey });
+      void queryClient.invalidateQueries({ queryKey: ['assistant-models'] });
     },
   });
 
@@ -57,6 +58,7 @@ export function useAiKeys() {
           : previous,
       );
       void queryClient.invalidateQueries({ queryKey });
+      void queryClient.invalidateQueries({ queryKey: ['assistant-models'] });
     },
   });
 

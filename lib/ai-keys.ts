@@ -1,25 +1,36 @@
 import { createHash, randomUUID } from 'node:crypto';
 
+import {
+  AI_PROVIDER_ORDER,
+  detectProvider,
+  environmentKeysFor,
+  providerDefinition,
+  validateProviderKey,
+  type AiProviderId,
+} from './ai-providers';
 import clientPromise from './mongodb';
 
 /**
- * Groq key pool with per-user storage and smart rotation.
+ * Multi-provider AI key pool with per-user storage and smart rotation.
  *
  * Keys can come from two places:
- *  - the server environment (`GROQ_API_KEYS`, or the older `GROQ_API_KEY`)
+ *  - server environment variables (for example `GROQ_API_KEYS`)
  *  - a signed-in user's account, added through `/api/agent/keys`
  *
- * Selection is least-recently-used with a round-robin offset, so free-tier
- * keys share the load instead of exhausting one at a time. Keys that return
- * 429/401/403/5xx are put on a short cooldown and the request moves to the
- * next key. Full keys are never sent to the client; only masked values.
+ * Each key belongs to a provider. Selection is least-recently-used with a
+ * round-robin offset, so free-tier keys share the load instead of exhausting
+ * one at a time. Keys that return 429/401/403/5xx are put on a short cooldown
+ * and the request moves to the next key. Full keys are never sent to the
+ * client; only masked values are.
+ *
+ * Older documents have no `provider` field; they are treated as Groq keys so
+ * existing installs keep working.
  */
 
 const DB_NAME = 'portfolio_tracker';
 const KEYS_COLLECTION = 'user_ai_keys';
 
 export const MAX_USER_KEYS = 10;
-export const GROQ_MODELS_URL = 'https://api.groq.com/openai/v1/models';
 
 export type AgentKeySource = 'account' | 'environment';
 
@@ -28,15 +39,17 @@ export interface AgentKey {
   key: string;
   label: string;
   source: AgentKeySource;
+  provider: AiProviderId;
   /** Cooldown persisted by another server instance, as epoch milliseconds. */
   cooldownUntil?: number;
 }
 
-export interface StoredGroqKey {
+export interface StoredAiKey {
   uid: string;
   keyId: string;
   key: string;
   label: string;
+  provider?: AiProviderId;
   createdAt: Date;
   lastUsedAt?: Date | null;
   cooldownUntil?: Date | null;
@@ -50,6 +63,7 @@ export interface KeyEntry {
   label: string;
   masked: string;
   source: AgentKeySource;
+  provider: AiProviderId;
   createdAt: string | null;
   lastUsedAt: string | null;
   status: 'active' | 'cooling';
@@ -90,7 +104,7 @@ function runtimeState(key: string): RuntimeState {
   return state;
 }
 
-export function maskGroqKey(key: string): string {
+export function maskAiKey(key: string): string {
   const trimmed = key.trim();
   if (trimmed.length <= 10) {
     return `${trimmed.slice(0, 2)}…${trimmed.slice(-2)}`;
@@ -98,36 +112,31 @@ export function maskGroqKey(key: string): string {
   return `${trimmed.slice(0, 7)}…${trimmed.slice(-4)}`;
 }
 
-/** Environment keys, de-duplicated and trimmed. */
-export function environmentGroqKeys(): AgentKey[] {
-  const raw = [
-    ...(process.env.GROQ_API_KEYS || '').split(','),
-    ...(process.env.GROQ_API_KEY ? [process.env.GROQ_API_KEY] : []),
-  ];
-
-  const seen = new Set<string>();
-  const keys: AgentKey[] = [];
-  for (const candidate of raw) {
-    const value = candidate.trim();
-    if (value.length < 20 || seen.has(value)) continue;
-    seen.add(value);
-    keys.push({
-      id: `env-${keys.length + 1}`,
+/** Environment keys for one provider, de-duplicated and trimmed. */
+export function environmentAgentKeys(provider: AiProviderId): AgentKey[] {
+  return environmentKeysFor(provider).map((value, index) => {
+    const definition = providerDefinition(provider);
+    return {
+      id: `env-${provider}-${index + 1}`,
       key: value,
-      label: `Server key ${keys.length + 1}`,
-      source: 'environment',
-    });
-  }
-  return keys;
+      label: `${definition.shortName} server key ${index + 1}`,
+      source: 'environment' as const,
+      provider,
+    };
+  });
+}
+
+function storedProvider(doc: StoredAiKey): AiProviderId {
+  return doc.provider && AI_PROVIDER_ORDER.includes(doc.provider) ? doc.provider : 'groq';
 }
 
 async function keysCollection() {
   if (!clientPromise) return null;
   const client = await clientPromise;
-  return client.db(DB_NAME).collection<StoredGroqKey>(KEYS_COLLECTION);
+  return client.db(DB_NAME).collection<StoredAiKey>(KEYS_COLLECTION);
 }
 
-async function storedKeyDocs(uid: string): Promise<StoredGroqKey[]> {
+async function storedKeyDocs(uid: string): Promise<StoredAiKey[]> {
   const collection = await keysCollection();
   if (!collection) return [];
   return collection.find({ uid }).sort({ createdAt: 1 }).limit(MAX_USER_KEYS + 5).toArray();
@@ -151,9 +160,9 @@ export function agentKeyCooldownRemaining(key: AgentKey): number {
   return Math.max(0, effectiveCooldown(key) - Date.now());
 }
 
-/** Account keys first, then environment keys as a shared fallback. */
-export async function getAgentKeyPool(uid: string): Promise<AgentKey[]> {
-  let stored: StoredGroqKey[] = [];
+/** Account keys for one provider, then environment keys as a shared fallback. */
+export async function getAgentKeyPool(uid: string, provider: AiProviderId): Promise<AgentKey[]> {
+  let stored: StoredAiKey[] = [];
   try {
     stored = await storedKeyDocs(uid);
   } catch (error: any) {
@@ -162,18 +171,20 @@ export async function getAgentKeyPool(uid: string): Promise<AgentKey[]> {
 
   const accountKeys: AgentKey[] = stored
     .filter((doc) => typeof doc.key === 'string' && doc.key.length >= 20)
+    .filter((doc) => storedProvider(doc) === provider)
     .map((doc) => ({
       id: doc.keyId,
       key: doc.key,
       label: doc.label || 'Personal key',
       source: 'account',
+      provider,
       cooldownUntil: doc.cooldownUntil ? new Date(doc.cooldownUntil).getTime() : undefined,
     }));
 
   // The same key can be present in both places (for example when a user adds
   // the server key to their account). Try it once, account entry first.
   const seen = new Set<string>();
-  return [...accountKeys, ...environmentGroqKeys()].filter((key) => {
+  return [...accountKeys, ...environmentAgentKeys(provider)].filter((key) => {
     if (seen.has(key.key)) return false;
     seen.add(key.key);
     return true;
@@ -285,8 +296,9 @@ function toEntry(key: AgentKey, createdAt?: Date | null): KeyEntry {
   return {
     id: key.id,
     label: key.label,
-    masked: maskGroqKey(key.key),
+    masked: maskAiKey(key.key),
     source: key.source,
+    provider: key.provider,
     createdAt: createdAt ? createdAt.toISOString() : null,
     lastUsedAt: null,
     status: remaining > 0 ? 'cooling' : 'active',
@@ -296,22 +308,25 @@ function toEntry(key: AgentKey, createdAt?: Date | null): KeyEntry {
 
 export async function listKeyEntries(uid: string): Promise<KeyListResult> {
   const stored = await storedKeyDocs(uid);
-  const environment = environmentGroqKeys();
 
   const accountEntries = stored
     .filter((doc) => typeof doc.key === 'string' && doc.key.length > 0)
     .map((doc) => {
+      const provider = storedProvider(doc);
       const key: AgentKey = {
         id: doc.keyId,
         key: doc.key,
         label: doc.label || 'Personal key',
         source: 'account',
+        provider,
         cooldownUntil: doc.cooldownUntil ? new Date(doc.cooldownUntil).getTime() : undefined,
       };
       const entry = toEntry(key, doc.createdAt);
       entry.lastUsedAt = doc.lastUsedAt ? new Date(doc.lastUsedAt).toISOString() : null;
       return entry;
     });
+
+  const environment = AI_PROVIDER_ORDER.flatMap((provider) => environmentAgentKeys(provider));
 
   return {
     keys: [...accountEntries, ...environment.map((key) => toEntry(key))],
@@ -324,8 +339,9 @@ export type AddKeyResult =
   | { ok: true; entry: KeyEntry }
   | { ok: false; status: number; error: string };
 
-export async function addStoredGroqKey(
+export async function addStoredAiKey(
   uid: string,
+  provider: AiProviderId,
   rawKey: string,
   label?: string,
 ): Promise<AddKeyResult> {
@@ -354,11 +370,13 @@ export async function addStoredGroqKey(
   }
 
   const now = new Date();
-  const doc: StoredGroqKey = {
+  const definition = providerDefinition(provider);
+  const doc: StoredAiKey = {
     uid,
     keyId: randomUUID(),
     key,
-    label: (label?.trim() || `Personal key ${count + 1}`).slice(0, 40),
+    provider,
+    label: (label?.trim() || `${definition.shortName} key ${count + 1}`).slice(0, 40),
     createdAt: now,
     lastUsedAt: null,
     cooldownUntil: null,
@@ -370,47 +388,31 @@ export async function addStoredGroqKey(
   await collection.insertOne(doc);
 
   const keyEntry = toEntry(
-    { id: doc.keyId, key: doc.key, label: doc.label, source: 'account' },
+    { id: doc.keyId, key: doc.key, label: doc.label, source: 'account', provider },
     doc.createdAt,
   );
   return { ok: true, entry: keyEntry };
 }
 
-export async function deleteStoredGroqKey(uid: string, keyId: string): Promise<boolean> {
+export async function deleteStoredAiKey(uid: string, keyId: string): Promise<boolean> {
   const collection = await keysCollection();
   if (!collection) return false;
   const result = await collection.deleteOne({ uid, keyId });
   return result.deletedCount > 0;
 }
 
-/** Confirms the key is active before storing it, using Groq's models endpoint. */
-export async function validateGroqKey(
+/** Confirms a key is active before storing it. */
+export async function validateAiKey(
+  provider: AiProviderId,
   key: string,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
-  try {
-    const response = await fetch(GROQ_MODELS_URL, {
-      headers: { Authorization: `Bearer ${key}` },
-      signal: AbortSignal.timeout(15_000),
-      cache: 'no-store',
-    });
+  return validateProviderKey(provider, key);
+}
 
-    if (response.status === 401 || response.status === 403) {
-      return {
-        ok: false,
-        error: 'Groq rejected this key. Check that it is active and copied correctly.',
-      };
-    }
-    if (!response.ok) {
-      return {
-        ok: false,
-        error: `Groq returned HTTP ${response.status} while checking the key. Try again.`,
-      };
-    }
-    return { ok: true };
-  } catch {
-    return {
-      ok: false,
-      error: 'Could not reach Groq to verify the key. Try again in a moment.',
-    };
+/** Best-effort provider detection used when the client does not send one. */
+export function providerForNewKey(key: string, requested?: unknown): AiProviderId | null {
+  if (requested === 'groq' || requested === 'google' || requested === 'openrouter') {
+    return requested;
   }
+  return detectProvider(key);
 }
