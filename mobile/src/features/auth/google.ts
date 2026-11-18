@@ -1,5 +1,5 @@
 import Constants from 'expo-constants';
-import { GoogleAuthProvider, signInWithCredential } from 'firebase/auth';
+import { GoogleAuthProvider, linkWithCredential, signInWithCredential } from 'firebase/auth';
 import { Platform } from 'react-native';
 
 import { env } from '@/src/lib/config/env';
@@ -89,10 +89,10 @@ function messageFor(error: unknown): Error {
 }
 
 /**
- * Opens the native Google account picker, turns the returned ID token into a
- * Firebase credential, and signs the user into the same project as the web app.
+ * Opens the native Google account picker and returns the ID token. Shared by
+ * sign-in and account linking so both use the same native flow.
  */
-export async function signInWithGoogle(): Promise<void> {
+export async function requestGoogleIdToken(): Promise<string> {
   const module = loadNativeModule();
   configureGoogle(module);
 
@@ -111,7 +111,7 @@ export async function signInWithGoogle(): Promise<void> {
       );
     }
 
-    await signInWithCredential(auth, GoogleAuthProvider.credential(idToken));
+    return idToken;
   } catch (error) {
     if (module.isErrorWithCode(error)) {
       if (error.code === module.statusCodes.SIGN_IN_CANCELLED) {
@@ -127,6 +127,23 @@ export async function signInWithGoogle(): Promise<void> {
 
     throw messageFor(error);
   }
+}
+
+/**
+ * Opens the native Google account picker, turns the returned ID token into a
+ * Firebase credential, and signs the user into the same project as the web app.
+ */
+export async function signInWithGoogle(): Promise<void> {
+  const idToken = await requestGoogleIdToken();
+  await signInWithCredential(auth, GoogleAuthProvider.credential(idToken));
+}
+
+/** Links a Google account to the currently signed-in (e.g. email/password) user. */
+export async function linkGoogleAccount(): Promise<void> {
+  const currentUser = auth.currentUser;
+  if (!currentUser) throw new Error('No user is currently signed in.');
+  const idToken = await requestGoogleIdToken();
+  await linkWithCredential(currentUser, GoogleAuthProvider.credential(idToken));
 }
 
 /** Best-effort Google session cleanup so the next sign-in shows the account picker. */

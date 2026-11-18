@@ -6,6 +6,10 @@
  */
 import { z } from 'zod';
 
+// Deployed Next.js backend. Override with EXPO_PUBLIC_API_URL for local dev,
+// e.g. http://127.0.0.1:3000 when Next.js runs in Termux on the same phone.
+const DEFAULT_API_URL = 'https://portfolio-tracker-hjvx.onrender.com';
+
 const firebaseDefaults = {
   apiKey: 'AIzaSyAEEYk3TibsfxvUXTxnCNrQbJF7YVH8f_s',
   authDomain: 'liquid-muse-491818-a9.firebaseapp.com',
@@ -37,7 +41,7 @@ const optional = (value: string | undefined) => {
 };
 
 const parsed = EnvSchema.safeParse({
-  apiUrl: process.env.EXPO_PUBLIC_API_URL ?? 'http://127.0.0.1:3000',
+  apiUrl: process.env.EXPO_PUBLIC_API_URL ?? DEFAULT_API_URL,
   firebase: {
     apiKey: process.env.EXPO_PUBLIC_FIREBASE_API_KEY ?? firebaseDefaults.apiKey,
     authDomain: process.env.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN ?? firebaseDefaults.authDomain,
@@ -60,7 +64,7 @@ if (!parsed.success) {
 export const env = parsed.success
   ? parsed.data
   : {
-      apiUrl: 'http://127.0.0.1:3000',
+      apiUrl: DEFAULT_API_URL,
       firebase: firebaseDefaults,
       googleWebClientId: undefined,
       googleIosClientId: undefined,

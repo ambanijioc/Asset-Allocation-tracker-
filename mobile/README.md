@@ -29,11 +29,13 @@ Scan the QR code with Expo Go on the same network.
 
 ### Configuration
 
-All configuration is optional — sensible development defaults are bundled.
-Create `mobile/.env` to override:
+All configuration is optional — the app defaults to the deployed Render backend
+at `https://portfolio-tracker-hjvx.onrender.com`. Create `mobile/.env` to
+override:
 
 ```bash
-EXPO_PUBLIC_API_URL=http://127.0.0.1:3000
+# Local Next.js backend (Termux on the same phone as Expo Go)
+# EXPO_PUBLIC_API_URL=http://127.0.0.1:3000
 # Optional Firebase overrides (public client config only)
 EXPO_PUBLIC_FIREBASE_API_KEY=...
 EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN=...
@@ -44,10 +46,8 @@ EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=...
 EXPO_PUBLIC_FORCE_DEMO=1
 ```
 
-`127.0.0.1` is correct when the Next.js server runs in Termux on the same phone
-as Expo Go. Use your machine's LAN address when running the backend elsewhere.
-Never put secrets in `EXPO_PUBLIC_*` variables — they are inlined into the
-bundle.
+Use your machine's LAN address when the backend runs elsewhere. Never put
+secrets in `EXPO_PUBLIC_*` variables — they are inlined into the bundle.
 
 ## Architecture
 
@@ -150,6 +150,17 @@ public keys, so the proxy cannot be used anonymously in production. Local
 Email/password authentication uses the Firebase JS SDK with AsyncStorage
 persistence, so sessions survive app restarts. Demo mode is a local flag that
 renders the bundled sample portfolio and disables all writes.
+
+### Account linking
+
+Open **Settings → Sign-in methods** to link Google to an email/password account,
+or set a password on a Google account. Both methods then sign into the same
+Firebase `uid`, so the portfolio, policy, and AI keys remain attached to one
+account. The last remaining sign-in method cannot be unlinked. If Firebase asks
+for a recent login, sign out and back in, then retry the link.
+
+The web app exposes the same controls under **Settings → Account — Sign-in
+methods**, so a link made on either platform works on both.
 
 ### Google Sign-In
 

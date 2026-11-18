@@ -1,7 +1,7 @@
 import { Feather } from '@expo/vector-icons';
 import Constants from 'expo-constants';
 import { useRouter } from 'expo-router';
-import type { ComponentProps } from 'react';
+import { useState, type ComponentProps } from 'react';
 import { Alert, Platform, StyleSheet, Text, View } from 'react-native';
 
 import { policyStatusView } from '@/src/components/portfolio/policyStatus';
@@ -10,10 +10,13 @@ import { Banner } from '@/src/components/ui/Banner';
 import { Button } from '@/src/components/ui/Button';
 import { Card } from '@/src/components/ui/Card';
 import { Chip } from '@/src/components/ui/Chip';
+import { GoogleIcon } from '@/src/components/ui/GoogleIcon';
 import { Screen } from '@/src/components/ui/Screen';
 import { ScreenHeader } from '@/src/components/ui/ScreenHeader';
 import { SectionHeader } from '@/src/components/ui/SectionHeader';
+import { TextField } from '@/src/components/ui/TextField';
 import { useAuth } from '@/src/features/auth/AuthProvider';
+import { isExpoGo, isGoogleSignInConfigured } from '@/src/features/auth/google';
 import { usePortfolioData } from '@/src/features/portfolio/queries';
 import { APP_VERSION, env } from '@/src/lib/config/env';
 import { formatCompactINR, formatPercent } from '@/src/lib/format/money';
@@ -38,9 +41,27 @@ function initials(name: string): string {
 export default function SettingsScreen() {
   const router = useRouter();
   const { colors, preference, setPreference } = useTheme();
-  const { user, isDemo, signOut } = useAuth();
+  const {
+    user,
+    isDemo,
+    signOut,
+    linkedProviders,
+    hasPasswordLinked,
+    hasGoogleLinked,
+    isLinking,
+    linkMessage,
+    setLinkMessage,
+    linkEmailPassword,
+    linkGoogle,
+    unlinkProvider,
+  } = useAuth();
   const { summary, policyConfig, policyEvaluation } = usePortfolioData();
   const policyStatus = policyStatusView(policyEvaluation);
+
+  const [showPasswordForm, setShowPasswordForm] = useState(false);
+  const [linkEmail, setLinkEmail] = useState(user?.email ?? '');
+  const [linkPassword, setLinkPassword] = useState('');
+  const googleAvailable = !isExpoGo && isGoogleSignInConfigured;
 
   const displayName = user?.displayName?.trim() || user?.email?.split('@')[0] || 'Demo investor';
   const email = user?.email ?? 'demo@assettracker.app';
@@ -58,6 +79,31 @@ export default function SettingsScreen() {
           style: 'destructive',
           onPress: () => {
             void signOut();
+          },
+        },
+      ],
+    );
+  };
+
+  const submitPasswordLink = async () => {
+    const ok = await linkEmailPassword(linkEmail, linkPassword);
+    if (ok) {
+      setLinkPassword('');
+      setShowPasswordForm(false);
+    }
+  };
+
+  const confirmUnlink = (providerId: string, label: string) => {
+    Alert.alert(
+      `Unlink ${label}`,
+      'You will no longer be able to sign in with this method.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Unlink',
+          style: 'destructive',
+          onPress: () => {
+            void unlinkProvider(providerId);
           },
         },
       ],
@@ -93,6 +139,125 @@ export default function SettingsScreen() {
             </Text>
           </View>
         </Card>
+
+        {!isDemo ? (
+          <View>
+            <SectionHeader title="Sign-in methods" subtitle="Use Google or email/password" />
+            <Card style={styles.card}>
+              <View style={styles.providerRow}>
+                <View style={[styles.providerIcon, { backgroundColor: colors.cardMuted }]}>
+                  <GoogleIcon size={18} />
+                </View>
+                <View style={styles.providerText}>
+                  <Text style={[type.bodyMedium, { color: colors.text }]}>Google</Text>
+                  <Text style={[type.caption, { color: colors.muted }]}>
+                    {hasGoogleLinked
+                      ? 'Linked to this account'
+                      : googleAvailable
+                        ? 'Not linked'
+                        : 'Needs a development build and Google client ID'}
+                  </Text>
+                </View>
+                {hasGoogleLinked ? (
+                  <Button
+                    label="Unlink"
+                    onPress={() => confirmUnlink('google.com', 'Google')}
+                    variant="ghost"
+                    size="sm"
+                    disabled={isLinking || linkedProviders.length <= 1}
+                  />
+                ) : (
+                  <Button
+                    label={isLinking ? 'Linking…' : 'Link'}
+                    onPress={() => {
+                      void linkGoogle();
+                    }}
+                    variant="secondary"
+                    size="sm"
+                    disabled={isLinking || !googleAvailable}
+                  />
+                )}
+              </View>
+
+              <View style={[styles.divider, { backgroundColor: colors.border }]} />
+
+              <View style={styles.providerRow}>
+                <View style={[styles.providerIcon, { backgroundColor: colors.cardMuted }]}>
+                  <Feather name="mail" size={17} color={colors.textSecondary} />
+                </View>
+                <View style={styles.providerText}>
+                  <Text style={[type.bodyMedium, { color: colors.text }]}>Email / Password</Text>
+                  <Text style={[type.caption, { color: colors.muted }]}>
+                    {hasPasswordLinked ? 'Linked to this account' : 'Not linked'}
+                  </Text>
+                </View>
+                {hasPasswordLinked ? (
+                  <Button
+                    label="Unlink"
+                    onPress={() => confirmUnlink('password', 'email/password')}
+                    variant="ghost"
+                    size="sm"
+                    disabled={isLinking || linkedProviders.length <= 1}
+                  />
+                ) : (
+                  <Button
+                    label={showPasswordForm ? 'Hide' : 'Set password'}
+                    onPress={() => {
+                      setShowPasswordForm((value) => !value);
+                      setLinkMessage('');
+                    }}
+                    variant="secondary"
+                    size="sm"
+                    disabled={isLinking}
+                  />
+                )}
+              </View>
+
+              {!hasPasswordLinked && showPasswordForm ? (
+                <View style={styles.form}>
+                  <TextField
+                    label="Email"
+                    value={linkEmail}
+                    onChangeText={setLinkEmail}
+                    autoCapitalize="none"
+                    keyboardType="email-address"
+                    textContentType="emailAddress"
+                    editable={!isLinking}
+                  />
+                  <TextField
+                    label="Password"
+                    value={linkPassword}
+                    onChangeText={setLinkPassword}
+                    secureTextEntry
+                    textContentType="newPassword"
+                    hint="At least 6 characters"
+                    editable={!isLinking}
+                  />
+                  <Button
+                    label={isLinking ? 'Linking…' : 'Link email/password'}
+                    onPress={() => {
+                      void submitPasswordLink();
+                    }}
+                    loading={isLinking}
+                    fullWidth
+                  />
+                </View>
+              ) : null}
+
+              {linkMessage ? (
+                <Banner
+                  tone={
+                    linkMessage.includes('linked') || linkMessage.includes('unlinked')
+                      ? 'info'
+                      : 'warning'
+                  }
+                  icon="info"
+                  message={linkMessage}
+                />
+              ) : null}
+            </Card>
+          </View>
+        ) : null}
 
         <View>
           <SectionHeader title="Portfolio" subtitle="Current snapshot" />
@@ -264,6 +429,16 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   policyText: { flex: 1, gap: 2 },
+  providerRow: { flexDirection: 'row', alignItems: 'center', gap: space.md },
+  providerIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: radius.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  providerText: { flex: 1, gap: 2 },
+  form: { gap: space.md },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: space.sm },
   row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: space.md },
   rowValue: { fontSize: 14, fontWeight: '600', fontVariant: ['tabular-nums'] },

@@ -9,17 +9,21 @@ import {
 } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
+  EmailAuthProvider,
   createUserWithEmailAndPassword,
+  linkWithCredential,
   onAuthStateChanged,
   sendPasswordResetEmail,
   signInWithEmailAndPassword,
   signOut as firebaseSignOut,
+  unlink,
   updateProfile,
   type User,
 } from 'firebase/auth';
 
 import {
   GoogleSignInCancelledError,
+  linkGoogleAccount as googleLinkAccount,
   signInWithGoogle as googleSignIn,
   signOutFromGoogle,
 } from './google';
@@ -41,6 +45,15 @@ interface AuthContextValue {
   signOut: () => Promise<void>;
   continueAsDemo: () => Promise<void>;
   getToken: () => Promise<string | null>;
+  linkedProviders: string[];
+  hasPasswordLinked: boolean;
+  hasGoogleLinked: boolean;
+  isLinking: boolean;
+  linkMessage: string;
+  setLinkMessage: (message: string) => void;
+  linkEmailPassword: (email: string, password: string) => Promise<boolean>;
+  linkGoogle: () => Promise<boolean>;
+  unlinkProvider: (providerId: string) => Promise<boolean>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -66,11 +79,50 @@ function messageFor(error: unknown): Error {
   return new Error(messages[code] ?? 'Something went wrong. Please try again.');
 }
 
+function mapLinkError(error: unknown): string {
+  const code =
+    typeof error === 'object' && error !== null && 'code' in error
+      ? String((error as { code: unknown }).code)
+      : '';
+
+  const messages: Record<string, string> = {
+    'auth/provider-already-linked': 'This sign-in method is already linked to your account.',
+    'auth/credential-already-in-use':
+      'These credentials belong to another account. Sign in with that method first, then link here.',
+    'auth/email-already-in-use':
+      'These credentials belong to another account. Sign in with that method first, then link here.',
+    'auth/requires-recent-login':
+      'For security, sign out and sign back in, then try linking again.',
+    'auth/invalid-credential': 'Invalid credentials. Check the email and password.',
+    'auth/wrong-password': 'Incorrect password. Try again.',
+    'auth/weak-password': 'Use at least 6 characters for your password.',
+    'auth/popup-closed-by-user': 'Google linking was cancelled.',
+    'auth/cancelled-popup-request': 'Google linking was cancelled.',
+    'auth/cancelled': 'Google linking was cancelled.',
+    'auth/network-request-failed': 'Network unavailable. Check your connection.',
+    'auth/operation-not-allowed': 'This sign-in method is not enabled in Firebase.',
+  };
+
+  return (
+    messages[code] ??
+    (error instanceof Error ? error.message : 'Linking failed. Please try again.')
+  );
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [isDemo, setIsDemo] = useState(false);
   const [authReady, setAuthReady] = useState(false);
   const [demoReady, setDemoReady] = useState(false);
+  const [isLinking, setIsLinking] = useState(false);
+  const [linkMessage, setLinkMessage] = useState('');
+
+  const linkedProviders = useMemo(
+    () => user?.providerData.map((provider) => provider.providerId) ?? [],
+    [user],
+  );
+  const hasPasswordLinked = linkedProviders.includes('password');
+  const hasGoogleLinked = linkedProviders.includes('google.com');
 
   useEffect(() => {
     let active = true;
@@ -158,6 +210,98 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return auth.currentUser.getIdToken();
   }, []);
 
+  const refreshUser = useCallback(async () => {
+    const current = auth.currentUser;
+    if (!current) {
+      setUser(null);
+      return;
+    }
+    try {
+      await current.reload();
+    } catch {
+      // The local providerData is still updated by link/unlink.
+    }
+    if (auth.currentUser) setUser({ ...auth.currentUser } as User);
+  }, []);
+
+  /** Link an email/password credential to the current (e.g. Google) session. */
+  const linkEmailPassword = useCallback(
+    async (email: string, password: string) => {
+      if (isLinking) return false;
+      if (!email.trim() || !password) {
+        setLinkMessage('Please enter both email and password.');
+        return false;
+      }
+      setIsLinking(true);
+      setLinkMessage('');
+      try {
+        const current = auth.currentUser;
+        if (!current) throw new Error('No user is currently signed in.');
+        await linkWithCredential(
+          current,
+          EmailAuthProvider.credential(email.trim(), password),
+        );
+        await refreshUser();
+        setLinkMessage('Email/password linked. You can now sign in with either method.');
+        return true;
+      } catch (error) {
+        setLinkMessage(mapLinkError(error));
+        return false;
+      } finally {
+        setIsLinking(false);
+      }
+    },
+    [isLinking, refreshUser],
+  );
+
+  /** Link Google to the current (e.g. email/password) session. */
+  const linkGoogle = useCallback(async () => {
+    if (isLinking) return false;
+    setIsLinking(true);
+    setLinkMessage('');
+    try {
+      await googleLinkAccount();
+      await refreshUser();
+      setLinkMessage('Google account linked. You can now sign in with either method.');
+      return true;
+    } catch (error) {
+      if (error instanceof GoogleSignInCancelledError) return false;
+      setLinkMessage(mapLinkError(error));
+      return false;
+    } finally {
+      setIsLinking(false);
+    }
+  }, [isLinking, refreshUser]);
+
+  const unlinkProvider = useCallback(
+    async (providerId: string) => {
+      if (isLinking) return false;
+      const current = auth.currentUser;
+      if (!current) {
+        setLinkMessage('No user is currently signed in.');
+        return false;
+      }
+      if ((current.providerData?.length ?? 0) <= 1) {
+        setLinkMessage('Cannot unlink the only sign-in method. Link another method first.');
+        return false;
+      }
+      setIsLinking(true);
+      setLinkMessage('');
+      try {
+        await unlink(current, providerId);
+        await refreshUser();
+        setLinkMessage('Sign-in method unlinked.');
+        return true;
+      } catch (error) {
+        setLinkMessage(mapLinkError(error));
+        return false;
+      } finally {
+        setIsLinking(false);
+      }
+    },
+    [isLinking, refreshUser],
+  );
+
   const status: AuthStatus = !authReady || !demoReady ? 'loading' : user || isDemo ? 'signedIn' : 'signedOut';
 
   const value = useMemo<AuthContextValue>(
@@ -173,6 +317,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       signOut,
       continueAsDemo,
       getToken,
+      linkedProviders,
+      hasPasswordLinked,
+      hasGoogleLinked,
+      isLinking,
+      linkMessage,
+      setLinkMessage,
+      linkEmailPassword,
+      linkGoogle,
+      unlinkProvider,
     }),
     [
       status,
@@ -185,6 +338,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       signOut,
       continueAsDemo,
       getToken,
+      linkedProviders,
+      hasPasswordLinked,
+      hasGoogleLinked,
+      isLinking,
+      linkMessage,
+      linkEmailPassword,
+      linkGoogle,
+      unlinkProvider,
     ],
   );
 
