@@ -20,7 +20,12 @@ const MAX_TOOL_ROUNDS = 5;
 function friendlyError(error: unknown): string {
   if (error instanceof ApiError) {
     if (error.status === 401) return 'Your session expired. Sign in again to use the assistant.';
-    if (error.status === 429) return 'The assistant is busy or out of free quota. Try again in a minute.';
+    if (error.status === 429) {
+      return (
+        error.message ||
+        'The assistant is out of quota right now. Add another key in Settings → AI assistant, or try again in a minute.'
+      );
+    }
     if (error.status === 0) return 'Could not reach the server. Check your connection and the API URL.';
     return error.message;
   }

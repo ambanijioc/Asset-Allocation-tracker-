@@ -141,6 +141,28 @@ export default function SettingsScreen() {
         </View>
 
         <View>
+          <SectionHeader title="AI assistant" subtitle="Keys and automatic rotation" />
+          <Card
+            onPress={() => router.push('/ai-keys')}
+            accessibilityLabel="Manage AI assistant API keys"
+            style={styles.policyRow}
+          >
+            <View style={[styles.policyIcon, { backgroundColor: colors.accentSoft }]}>
+              <Feather name="key" size={18} color={colors.accent} />
+            </View>
+            <View style={styles.policyText}>
+              <Text style={[type.title, { color: colors.text }]}>API keys</Text>
+              <Text style={[type.caption, { color: colors.muted }]} numberOfLines={1}>
+                {isDemo
+                  ? 'Sign in to manage keys'
+                  : 'Add multiple Groq keys for fallback'}
+              </Text>
+            </View>
+            <Feather name="chevron-right" size={18} color={colors.muted} />
+          </Card>
+        </View>
+
+        <View>
           <SectionHeader title="Appearance" subtitle="Matches your device by default" />
           <Card style={styles.card}>
             <View style={styles.chips}>

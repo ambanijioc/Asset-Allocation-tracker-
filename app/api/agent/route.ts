@@ -1,6 +1,15 @@
 import { NextResponse } from 'next/server';
 
-import { verifyFirebaseIdToken } from '@/lib/firebase-auth';
+import { resolveRequestUid } from '@/lib/agent-auth';
+import {
+  agentKeyCooldownRemaining,
+  getAgentKeyPool,
+  markKeyFailure,
+  markKeySuccess,
+  markKeyUsed,
+  orderAgentKeys,
+  type AgentKey,
+} from '@/lib/groq-keys';
 
 export const runtime = 'nodejs';
 
@@ -177,40 +186,14 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Conversation is too large.' }, { status: 413 });
   }
 
-  const authorization = request.headers.get('authorization') || '';
-  const token = authorization.startsWith('Bearer ') ? authorization.slice(7) : null;
-
-  let uid = 'development';
-  if (token) {
-    try {
-      const user = await verifyFirebaseIdToken(token);
-      if (!user) {
-        return NextResponse.json({ error: 'Your session expired. Please sign in again.' }, { status: 401 });
-      }
-      uid = user.uid;
-    } catch (error: any) {
-      console.warn('[AGENT] Firebase token verification failed:', error?.message || error);
-      return NextResponse.json(
-        { error: 'Could not verify your session. Please sign in again.' },
-        { status: 401 },
-      );
-    }
-  } else if (process.env.NODE_ENV === 'production') {
-    return NextResponse.json({ error: 'Sign in to use the assistant.' }, { status: 401 });
-  }
+  const auth = await resolveRequestUid(request);
+  if ('response' in auth) return auth.response;
+  const uid = auth.uid;
 
   if (isRateLimited(uid)) {
     return NextResponse.json(
       { error: 'Too many assistant requests. Wait a few minutes and try again.' },
       { status: 429 },
-    );
-  }
-
-  const apiKey = process.env.GROQ_API_KEY;
-  if (!apiKey) {
-    return NextResponse.json(
-      { error: 'The assistant is not configured yet (GROQ_API_KEY is missing).' },
-      { status: 503 },
     );
   }
 
@@ -229,70 +212,175 @@ export async function POST(request: Request) {
   const requestedModel = typeof body?.model === 'string' ? body.model : '';
   const model = ALLOWED_MODELS.has(requestedModel) ? requestedModel : DEFAULT_MODEL;
 
+  let pool: AgentKey[] = [];
   try {
-    const response = await fetch(GROQ_URL, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
+    pool = await getAgentKeyPool(uid);
+  } catch (error: any) {
+    console.error('[AGENT] Could not load the key pool:', error?.message || error);
+    return NextResponse.json(
+      { error: 'Could not load the AI key pool. Try again in a moment.' },
+      { status: 503 },
+    );
+  }
+
+  if (pool.length === 0) {
+    return NextResponse.json(
+      {
+        error:
+          'The assistant has no AI key yet. Add one in Settings → AI assistant, or set GROQ_API_KEYS on the server.',
       },
-      body: JSON.stringify({
-        model,
-        messages: [{ role: 'system', content: systemPrompt() }, ...messages],
-        tools: TOOLS,
-        tool_choice: 'auto',
-        max_completion_tokens: 1600,
-      }),
-      signal: AbortSignal.timeout(45_000),
-      cache: 'no-store',
-    });
+      { status: 503 },
+    );
+  }
 
-    const text = await response.text();
-    let payload: any = null;
+  const providerBody = JSON.stringify({
+    model,
+    messages: [{ role: 'system', content: systemPrompt() }, ...messages],
+    tools: TOOLS,
+    tool_choice: 'auto',
+    max_completion_tokens: 1600,
+  });
+
+  // Stay inside the mobile client's 60s timeout even with several keys.
+  const deadline = Date.now() + 55_000;
+  let attempts = 0;
+  let sawRateLimit = false;
+  let sawAuthFailure = false;
+  let sawTimeout = false;
+  let lastStatus = 0;
+
+  for (const key of orderAgentKeys(pool)) {
+    if (agentKeyCooldownRemaining(key) > 0) continue;
+
+    const remaining = deadline - Date.now();
+    if (remaining < 3_000) break;
+
+    attempts += 1;
+    markKeyUsed(uid, key);
+
     try {
-      payload = JSON.parse(text);
-    } catch {
-      payload = null;
-    }
+      const response = await fetch(GROQ_URL, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${key.key}`,
+          'Content-Type': 'application/json',
+        },
+        body: providerBody,
+        signal: AbortSignal.timeout(Math.min(30_000, remaining)),
+        cache: 'no-store',
+      });
 
-    if (!response.ok) {
-      const providerMessage = payload?.error?.message || payload?.error || text.slice(0, 200);
-      console.error(`[AGENT] Groq error (${response.status}):`, String(providerMessage).slice(0, 300));
-
-      if (response.status === 429) {
-        return NextResponse.json(
-          { error: 'The AI provider is rate-limiting us right now. Try again in a minute.' },
-          { status: 429 },
-        );
+      const text = await response.text();
+      let payload: any = null;
+      try {
+        payload = JSON.parse(text);
+      } catch {
+        payload = null;
       }
-      if (response.status === 401 || response.status === 403) {
+
+      if (!response.ok) {
+        const providerMessage = payload?.error?.message || payload?.error || text.slice(0, 200);
+        console.warn(
+          `[AGENT] Groq key ${key.id} failed (${response.status}):`,
+          String(providerMessage).slice(0, 200),
+        );
+        markKeyFailure(uid, key, response.status, String(providerMessage));
+        lastStatus = response.status;
+
+        if (response.status === 429) sawRateLimit = true;
+        if (response.status === 401 || response.status === 403) sawAuthFailure = true;
+
+        const retryable =
+          response.status === 429 ||
+          response.status === 401 ||
+          response.status === 403 ||
+          response.status === 408 ||
+          response.status >= 500;
+        if (retryable) continue;
+
+        if (response.status === 400) {
+          return NextResponse.json(
+            {
+              error:
+                'The assistant could not process that request. Try a shorter or simpler question.',
+            },
+            { status: 400 },
+          );
+        }
         return NextResponse.json(
-          { error: 'The AI provider rejected the server key. Check GROQ_API_KEY.' },
+          { error: 'The AI provider could not answer. Try again shortly.' },
           { status: 502 },
         );
       }
-      return NextResponse.json(
-        { error: 'The AI provider could not answer. Try again shortly.' },
-        { status: 502 },
+
+      markKeySuccess(uid, key);
+      const message = payload?.choices?.[0]?.message;
+      if (!message) {
+        return NextResponse.json(
+          { error: 'The AI provider returned an empty response.' },
+          { status: 502 },
+        );
+      }
+
+      return NextResponse.json({
+        message,
+        model: payload?.model || model,
+        usage: payload?.usage ?? null,
+      });
+    } catch (error: any) {
+      const timedOut = error?.name === 'TimeoutError' || error?.name === 'AbortError';
+      if (timedOut) sawTimeout = true;
+      console.warn(
+        `[AGENT] Groq key ${key.id} request failed:`,
+        error?.message || error,
       );
+      markKeyFailure(uid, key, timedOut ? 408 : 0, error?.message || 'network error');
     }
+  }
 
-    const message = payload?.choices?.[0]?.message;
-    if (!message) {
-      return NextResponse.json({ error: 'The AI provider returned an empty response.' }, { status: 502 });
-    }
-
-    return NextResponse.json({
-      message,
-      model: payload?.model || model,
-      usage: payload?.usage ?? null,
-    });
-  } catch (error: any) {
-    console.error('[AGENT] Request failed:', error?.message || error);
-    const timedOut = error?.name === 'TimeoutError' || error?.name === 'AbortError';
+  if (attempts === 0) {
     return NextResponse.json(
-      { error: timedOut ? 'The assistant took too long to answer. Try again.' : 'Could not reach the AI provider.' },
-      { status: timedOut ? 504 : 502 },
+      {
+        error:
+          'Every AI key is cooling down right now. Wait a minute, or add another key in Settings → AI assistant.',
+      },
+      { status: 429 },
     );
   }
+
+  if (sawRateLimit) {
+    return NextResponse.json(
+      {
+        error:
+          'All AI keys are rate-limited right now. Wait a minute, or add another key in Settings → AI assistant.',
+      },
+      { status: 429 },
+    );
+  }
+
+  if (sawAuthFailure && !sawTimeout) {
+    return NextResponse.json(
+      {
+        error:
+          'Groq rejected every key it tried. Check the key in Settings → AI assistant, or add another one.',
+      },
+      { status: 502 },
+    );
+  }
+
+  if (sawTimeout) {
+    return NextResponse.json(
+      { error: 'The assistant took too long to answer. Try again.' },
+      { status: 504 },
+    );
+  }
+
+  console.error('[AGENT] All key attempts failed. Last provider status:', lastStatus);
+  return NextResponse.json(
+    {
+      error:
+        'No AI key could answer right now. Try again shortly, or add another key in Settings → AI assistant.',
+    },
+    { status: 502 },
+  );
 }

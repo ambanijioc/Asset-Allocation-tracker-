@@ -57,6 +57,7 @@ app/                      routes only
   asset/new.tsx           add holding (modal)
   asset/[id]/             detail + edit (modal)
   assistant.tsx           read-only AI chat (modal)
+  ai-keys.tsx             Groq key manager (modal)
   login.tsx               email/password, Google + demo entry
 src/
   components/ui/          design-system primitives
@@ -105,7 +106,8 @@ assistant" card) runs a tool-calling loop against the backend proxy at
 `/api/agent`:
 
 1. the app sends the conversation and its Firebase ID token;
-2. the server verifies the token, adds the Groq key and the tool schemas;
+2. the server verifies the token, picks a Groq key from the pool and adds the
+   tool schemas;
 3. the model asks for portfolio data (`get_portfolio_summary`,
    `get_exposure_summary`, `search_asset`, `get_quote`,
    `get_fund_holdings`);
@@ -117,13 +119,27 @@ The assistant is deliberately **read-only**. It cannot add, edit or delete
 assets, and it never forces a price refresh (which would write to the Google
 Sheet). Write tools should be added behind an explicit confirmation sheet.
 
-The model key lives on the server, never in the app:
+Keys live on the server, never in the app bundle. There are two ways to add
+them:
+
+1. **In the app** — Settings → AI assistant → **API keys**. Keys are validated
+   against Groq, stored in MongoDB under the signed-in user's uid, and shown
+   only as masked values (`gsk_abc…wxyz`). Up to 10 per account.
+2. **In the server environment** — comma-separated in `GROQ_API_KEYS`, with
+   `GROQ_API_KEY` still supported as a single-key fallback:
 
 ```bash
 # web repo .env.local
+GROQ_API_KEYS=gsk_key_one,gsk_key_two
 GROQ_API_KEY=gsk_...
 FIREBASE_PROJECT_ID=liquid-muse-491818-a9
 ```
+
+`/api/agent` prefers the signed-in user's own keys, then the server pool. It
+uses the least-recently-used key first, rotates through the rest, and puts a
+key on cooldown when Groq returns 429/401/403/5xx before trying the next one.
+The mobile key screen calls `/api/agent/keys` (GET/POST/DELETE), which is
+backed by the `user_ai_keys` MongoDB collection.
 
 `lib/firebase-auth.ts` verifies Firebase RS256 ID tokens against Google's
 public keys, so the proxy cannot be used anonymously in production. Local

@@ -83,6 +83,10 @@ function RootNavigator() {
           options={{ presentation: 'modal', animation: 'slide_from_bottom' }}
         />
         <Stack.Screen
+          name="ai-keys"
+          options={{ presentation: 'modal', animation: 'slide_from_bottom' }}
+        />
+        <Stack.Screen
           name="asset/new"
           options={{ presentation: 'modal', animation: 'slide_from_bottom' }}
         />
