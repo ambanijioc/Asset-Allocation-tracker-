@@ -17,6 +17,7 @@ import { Banner } from '@/src/components/ui/Banner';
 import { Card } from '@/src/components/ui/Card';
 import { Chip } from '@/src/components/ui/Chip';
 import { IconButton } from '@/src/components/ui/IconButton';
+import { LoadingProgress } from '@/src/components/ui/LoadingProgress';
 import { Screen } from '@/src/components/ui/Screen';
 import { ScreenHeader } from '@/src/components/ui/ScreenHeader';
 import { Skeleton } from '@/src/components/ui/Skeleton';
@@ -39,7 +40,7 @@ export default function AssetsScreen() {
   const insets = useSafeAreaInsets();
   const { colors } = useTheme();
   const { isDemo } = useAuth();
-  const { summary, isLoading, isRefreshing, error, refetch } = usePortfolioData();
+  const { summary, progress, isLoading, isRefreshing, error, refetch } = usePortfolioData();
 
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState('All');
@@ -104,6 +105,10 @@ export default function AssetsScreen() {
         <Banner tone="warning" icon="eye" message="Demo data is read-only. Sign in to edit holdings." />
       ) : null}
 
+      {progress.active && !isLoading ? (
+        <LoadingProgress progress={progress} compact />
+      ) : null}
+
       <View style={[styles.search, { backgroundColor: colors.card, borderColor: colors.border }]}>
         <Feather name="search" size={15} color={colors.muted} />
         <TextInput
@@ -157,11 +162,14 @@ export default function AssetsScreen() {
             />
           </Card>
         ) : (
-          <View style={styles.skeletonStack}>
-            {[0, 1, 2, 3].map((index) => (
-              <Skeleton key={index} height={72} borderRadius={16} />
-            ))}
-          </View>
+          <>
+            <LoadingProgress progress={progress} />
+            <View style={styles.skeletonStack}>
+              {[0, 1, 2, 3].map((index) => (
+                <Skeleton key={index} height={72} borderRadius={16} />
+              ))}
+            </View>
+          </>
         )}
       </Screen>
     );

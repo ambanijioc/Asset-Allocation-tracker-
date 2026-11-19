@@ -51,7 +51,14 @@ export async function fetchSnapshot(
   try {
     const response = await apiFetch<RawSnapshotResponse>(
       `/api/sync?uid=${encodeURIComponent(uid)}`,
-      { signal: options.signal, token: options.token },
+      {
+        signal: options.signal,
+        token: options.token,
+        // The free Render backend may need to boot after idling. A longer
+        // timeout lets the first request finish instead of aborting and
+        // starting over.
+        timeoutMs: 45_000,
+      },
     );
     if (!response.success || !response.data) {
       throw new ApiError(response.error ?? 'Malformed portfolio response', 500);

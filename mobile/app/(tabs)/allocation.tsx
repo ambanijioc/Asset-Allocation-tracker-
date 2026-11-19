@@ -10,6 +10,7 @@ import { Banner } from '@/src/components/ui/Banner';
 import { Button } from '@/src/components/ui/Button';
 import { Card } from '@/src/components/ui/Card';
 import { IconButton } from '@/src/components/ui/IconButton';
+import { LoadingProgress } from '@/src/components/ui/LoadingProgress';
 import { Screen } from '@/src/components/ui/Screen';
 import { ScreenHeader } from '@/src/components/ui/ScreenHeader';
 import { SectionHeader } from '@/src/components/ui/SectionHeader';
@@ -37,6 +38,7 @@ export default function AllocationScreen() {
     policyConfig,
     policyEvaluation,
     isDemo,
+    progress,
     isLoading,
     isRefreshing,
     error,
@@ -121,7 +123,10 @@ export default function AllocationScreen() {
             />
           </Card>
         ) : isLoading ? (
-          <AllocationSkeleton />
+          <>
+            <LoadingProgress progress={progress} />
+            <AllocationSkeleton />
+          </>
         ) : summary.assetCount === 0 ? (
           <Card>
             <EmptyState
@@ -134,6 +139,8 @@ export default function AllocationScreen() {
           </Card>
         ) : (
           <>
+            {progress.active ? <LoadingProgress progress={progress} compact /> : null}
+
             <Card style={styles.summaryCard}>
               <View style={styles.summaryGrid}>
                 <SummaryStat

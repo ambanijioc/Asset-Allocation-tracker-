@@ -1,4 +1,5 @@
-import { QueryClientProvider } from '@tanstack/react-query';
+import type { Query } from '@tanstack/react-query';
+import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
@@ -8,13 +9,27 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import 'react-native-reanimated';
 
 import { AuthProvider, useAuth } from '@/src/features/auth/AuthProvider';
-import { createQueryClient, wireAppStateFocus } from '@/src/lib/query/queryClient';
+import {
+  createQueryClient,
+  queryPersister,
+  wireAppStateFocus,
+} from '@/src/lib/query/queryClient';
 import { ThemeProvider, useTheme } from '@/src/lib/theme/ThemeProvider';
 
 export { ErrorBoundary } from 'expo-router';
 
 export const unstable_settings = {
   anchor: '(tabs)',
+};
+
+const PERSIST_OPTIONS = {
+  persister: queryPersister,
+  maxAge: 24 * 60 * 60_000,
+  buster: 'v1',
+  dehydrateOptions: {
+    shouldDehydrateQuery: (query: Query) =>
+      query.state.status === 'success' && query.queryKey[0] === 'portfolio',
+  },
 };
 
 void SplashScreen.preventAutoHideAsync().catch(() => {});
@@ -27,11 +42,11 @@ export default function RootLayout() {
   return (
     <SafeAreaProvider>
       <ThemeProvider>
-        <QueryClientProvider client={queryClient}>
+        <PersistQueryClientProvider client={queryClient} persistOptions={PERSIST_OPTIONS}>
           <AuthProvider>
             <RootNavigator />
           </AuthProvider>
-        </QueryClientProvider>
+        </PersistQueryClientProvider>
       </ThemeProvider>
     </SafeAreaProvider>
   );

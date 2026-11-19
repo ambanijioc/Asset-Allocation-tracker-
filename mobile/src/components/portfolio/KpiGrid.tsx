@@ -23,6 +23,9 @@ export function KpiGrid({
   onPolicyPress,
 }: KpiGridProps) {
   const positive = summary.pnl >= 0;
+  const noQuotes = summary.assetCount > 0 && summary.pricedCount === 0;
+  const partialQuotes = summary.pricedCount > 0 && summary.pricedCount < summary.assetCount;
+  const pnlTone = noQuotes ? 'neutral' : positive ? 'positive' : 'negative';
   const policyStatus = policyStatusView(policy);
   const policyHeadline =
     policyReadOnly && policy.isTemplate ? 'Template' : policyStatus.headline;
@@ -47,12 +50,25 @@ export function KpiGrid({
       </View>
       <View style={styles.row}>
         <StatCard
-          label="Total P&L"
-          value={`${positive ? '+' : '-'}${formatCompactINR(Math.abs(summary.pnl))}`}
-          badgeLabel={formatPercent(summary.pnlPercent, { signed: true })}
-          badgeTone={positive ? 'positive' : 'negative'}
-          tone={positive ? 'positive' : 'negative'}
-          icon={positive ? 'trending-up' : 'trending-down'}
+          label="Unrealised P&L"
+          value={
+            noQuotes
+              ? '—'
+              : `${positive ? '+' : '-'}${formatCompactINR(Math.abs(summary.pnl))}`
+          }
+          hint={
+            noQuotes
+              ? 'Waiting for live quotes'
+              : partialQuotes
+                ? `${summary.pricedCount}/${summary.assetCount} priced · partial`
+                : undefined
+          }
+          badgeLabel={noQuotes ? undefined : formatPercent(summary.pnlPercent, { signed: true })}
+          badgeTone={noQuotes ? undefined : positive ? 'positive' : 'negative'}
+          tone={pnlTone}
+          icon={
+            noQuotes ? 'clock' : positive ? 'trending-up' : 'trending-down'
+          }
         />
         <StatCard
           label="Policy"

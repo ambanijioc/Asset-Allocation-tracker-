@@ -33,37 +33,43 @@ export function Screen({
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
 
-  const rootStyle = [
-    styles.root,
-    { backgroundColor: colors.bg, paddingTop: insets.top },
-    style,
-  ];
-
-  if (!scroll) return <View style={rootStyle}>{children}</View>;
-
+  // The safe-area padding lives on a wrapper, not the ScrollView itself.
+  // Otherwise the scroll viewport stays full-bleed and content slides under the
+  // status bar clock and icons while scrolling.
   return (
-    <ScrollView
-      style={rootStyle}
-      contentContainerStyle={[
-        styles.content,
-        { paddingBottom: insets.bottom + space.xxxl * 2 },
-        contentContainerStyle,
-      ]}
-      showsVerticalScrollIndicator={false}
-      keyboardShouldPersistTaps="handled"
-      refreshControl={
-        onRefresh ? (
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={onRefresh}
-            tintColor={colors.muted}
-            colors={[colors.accent]}
-          />
-        ) : undefined
-      }
+    <View
+      style={[styles.root, { backgroundColor: colors.bg, paddingTop: insets.top }, style]}
     >
-      {children}
-    </ScrollView>
+      {scroll ? (
+        <ScrollView
+          style={styles.root}
+          contentContainerStyle={[
+            styles.content,
+            {
+              paddingTop: space.sm,
+              paddingBottom: insets.bottom + space.xxxl * 2,
+            },
+            contentContainerStyle,
+          ]}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+          refreshControl={
+            onRefresh ? (
+              <RefreshControl
+                refreshing={refreshing}
+                onRefresh={onRefresh}
+                tintColor={colors.muted}
+                colors={[colors.accent]}
+              />
+            ) : undefined
+          }
+        >
+          {children}
+        </ScrollView>
+      ) : (
+        children
+      )}
+    </View>
   );
 }
 
@@ -71,6 +77,5 @@ const styles = StyleSheet.create({
   root: { flex: 1 },
   content: {
     paddingHorizontal: space.lg,
-    paddingTop: space.sm,
   },
 });

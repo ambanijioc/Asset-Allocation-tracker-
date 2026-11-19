@@ -10,6 +10,7 @@ import { SectorCapTreemap } from '@/src/components/portfolio/insights/SectorCapT
 import { Banner } from '@/src/components/ui/Banner';
 import { Card } from '@/src/components/ui/Card';
 import { IconButton } from '@/src/components/ui/IconButton';
+import { LoadingProgress } from '@/src/components/ui/LoadingProgress';
 import { Screen } from '@/src/components/ui/Screen';
 import { ScreenHeader } from '@/src/components/ui/ScreenHeader';
 import { SectionHeader } from '@/src/components/ui/SectionHeader';
@@ -27,6 +28,7 @@ export default function InsightsScreen() {
     analytics,
     fundCoverage,
     isDemo,
+    progress,
     isLoading,
     isRefreshing,
     isFundLoading,
@@ -69,7 +71,10 @@ export default function InsightsScreen() {
             />
           </Card>
         ) : isLoading ? (
-          <InsightsSkeleton />
+          <>
+            <LoadingProgress progress={progress} />
+            <InsightsSkeleton />
+          </>
         ) : summary.assetCount === 0 ? (
           <Card>
             <EmptyState
@@ -82,6 +87,8 @@ export default function InsightsScreen() {
           </Card>
         ) : (
           <>
+            {progress.active ? <LoadingProgress progress={progress} compact /> : null}
+
             <InsightsSummary
               portfolio={analytics.totals.portfolio}
               equity={analytics.totals.equity}
@@ -193,7 +200,7 @@ function InsightsSummary({ portfolio, equity, fund, coverage }: InsightsSummaryP
     <Card style={styles.summaryCard}>
       <View style={styles.summaryGrid}>
         <SummaryStat
-          label="Equity"
+          label="Equity exposure"
           value={formatCompactINR(equity)}
           hint={`${formatPercent(equityPercent)} of portfolio`}
           icon="trending-up"
@@ -218,6 +225,9 @@ function InsightsSummary({ portfolio, equity, fund, coverage }: InsightsSummaryP
           color={colors.positive}
         />
       </View>
+      <Text style={[type.caption, styles.summaryNote, { color: colors.muted }]}>
+        Equity exposure includes fund holdings, so fund assets are not added on top.
+      </Text>
     </Card>
   );
 }
@@ -269,8 +279,9 @@ function InsightsSkeleton() {
 const styles = StyleSheet.create({
   stack: { gap: space.xl },
   cards: { gap: space.lg },
-  summaryCard: { paddingVertical: space.lg },
+  summaryCard: { paddingVertical: space.lg, gap: space.md },
   summaryGrid: { flexDirection: 'row', alignItems: 'stretch' },
+  summaryNote: { lineHeight: 16 },
   summaryStat: { flex: 1, gap: 3, paddingHorizontal: space.xs },
   summaryLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 3 },
   summaryLabel: { ...type.label, fontSize: 9, letterSpacing: 0.3, flex: 1 },

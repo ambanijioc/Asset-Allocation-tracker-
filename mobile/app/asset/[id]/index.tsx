@@ -125,6 +125,8 @@ export default function AssetDetailScreen() {
   const averagePriceInr =
     asset.quantity > 0 ? holding.investedValue / 100 / asset.quantity : 0;
   const positive = holding.pnl >= 0;
+  const priced = holding.hasLivePrice;
+  const pnlTone = priced ? (positive ? colors.positive : colors.negative) : colors.muted;
   const purchaseDate = asset.purchaseDate
     ? new Date(asset.purchaseDate).toLocaleDateString('en-IN', {
         day: 'numeric',
@@ -178,18 +180,16 @@ export default function AssetDetailScreen() {
           </Text>
           <View style={styles.pnlRow}>
             <Feather
-              name={positive ? 'trending-up' : 'trending-down'}
+              name={priced ? (positive ? 'trending-up' : 'trending-down') : 'clock'}
               size={14}
-              color={positive ? colors.positive : colors.negative}
+              color={pnlTone}
             />
-            <Text
-              style={[
-                styles.pnlText,
-                numeric,
-                { color: positive ? colors.positive : colors.negative },
-              ]}
-            >
-              {formatSignedINR(holding.pnl)} ({formatPercent(holding.pnlPercent, { signed: true })})
+            <Text style={[styles.pnlText, numeric, { color: pnlTone }]}>
+              {priced
+                ? `${formatSignedINR(holding.pnl)} (${formatPercent(holding.pnlPercent, {
+                    signed: true,
+                  })})`
+                : 'Cost basis · no live quote'}
             </Text>
           </View>
         </Card>
@@ -207,8 +207,8 @@ export default function AssetDetailScreen() {
           <Divider />
           <Row
             label="Unrealised P&L"
-            value={formatSignedINR(holding.pnl)}
-            tone={positive ? colors.positive : colors.negative}
+            value={priced ? formatSignedINR(holding.pnl) : '—'}
+            tone={pnlTone}
           />
         </Card>
 

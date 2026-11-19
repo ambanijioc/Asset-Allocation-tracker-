@@ -35,8 +35,17 @@ export function HoldingRow({
 }: HoldingRowProps) {
   const { colors } = useTheme();
   const { asset, pnl, pnlPercent, hasLivePrice } = holding;
-  const tone = pnl > 0 ? colors.positive : pnl < 0 ? colors.negative : colors.muted;
+  const tone = !hasLivePrice
+    ? colors.muted
+    : pnl > 0
+      ? colors.positive
+      : pnl < 0
+        ? colors.negative
+        : colors.muted;
   const tint = accentColor ?? colors.accent;
+  const pnlLabel = hasLivePrice
+    ? `${pnl >= 0 ? 'up' : 'down'} ${formatPercent(Math.abs(pnlPercent))}`
+    : 'cost basis';
 
   const body = (
     <View style={styles.body}>
@@ -72,7 +81,7 @@ export function HoldingRow({
             {formatCompactINR(holding.currentValue)}
           </Text>
           <Text style={[styles.pnl, numeric, { color: tone }]} numberOfLines={1}>
-            {formatPercent(pnlPercent, { signed: true })}
+            {hasLivePrice ? formatPercent(pnlPercent, { signed: true }) : '—'}
           </Text>
         </View>
 
@@ -82,13 +91,18 @@ export function HoldingRow({
       </View>
 
       {showWeight ? (
-        <View style={[styles.weightTrack, { backgroundColor: colors.cardMuted }]}>
-          <View
-            style={[
-              styles.weightFill,
-              { width: `${Math.min(Math.max(weight, 0), 100)}%`, backgroundColor: tint },
-            ]}
-          />
+        <View style={styles.weightRow}>
+          <View style={[styles.weightTrack, { backgroundColor: colors.cardMuted }]}>
+            <View
+              style={[
+                styles.weightFill,
+                { width: `${Math.min(Math.max(weight, 0), 100)}%`, backgroundColor: tint },
+              ]}
+            />
+          </View>
+          <Text style={[styles.weightValue, numeric, { color: colors.muted }]}>
+            {formatPercent(Math.min(Math.max(weight, 0), 100))}
+          </Text>
         </View>
       ) : null}
     </View>
@@ -100,9 +114,9 @@ export function HoldingRow({
     <Pressable
       onPress={onPress}
       accessibilityRole="button"
-      accessibilityLabel={`${asset.name}, ${formatCompactINR(holding.currentValue)}, ${
-        pnl >= 0 ? 'up' : 'down'
-      } ${formatPercent(Math.abs(pnlPercent))}`}
+      accessibilityLabel={`${asset.name}, ${formatCompactINR(holding.currentValue)}, ${pnlLabel}${
+        showWeight && weight > 0 ? `, ${formatPercent(weight)} of portfolio` : ''
+      }`}
       style={({ pressed }) => [pressed && styles.pressed]}
     >
       {body}
@@ -132,7 +146,14 @@ const styles = StyleSheet.create({
   value: { fontSize: 14, fontWeight: '600' },
   pnl: { fontSize: 11, fontWeight: '600' },
   chevron: { marginLeft: -space.xs },
-  weightTrack: { height: 3, borderRadius: 2, overflow: 'hidden', marginLeft: 34 + space.md },
+  weightRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.sm,
+    marginLeft: 34 + space.md,
+  },
+  weightTrack: { flex: 1, height: 3, borderRadius: 2, overflow: 'hidden' },
   weightFill: { height: '100%', borderRadius: 2 },
+  weightValue: { fontSize: 10, width: 42, textAlign: 'right' },
   pressed: { opacity: 0.65 },
 });

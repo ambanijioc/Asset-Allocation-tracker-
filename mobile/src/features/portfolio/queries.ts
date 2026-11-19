@@ -46,14 +46,26 @@ export const portfolioKeys = {
   screener: (filters: ScreenerFilters) => ['screener', filters] as const,
 };
 
+/**
+ * Wall-clock start of the current first load. Shared across screens so a tab
+ * mounted mid-load shows the same remaining-time estimate as the dashboard.
+ */
+let portfolioLoadStartedAt: number | null = null;
+
 export function usePortfolioSnapshot() {
   const { uid, status, isDemo, getToken } = useAuth();
 
   return useQuery({
     queryKey: portfolioKeys.snapshot(uid ?? 'anonymous'),
-    queryFn: async ({ signal }) => fetchSnapshot(uid!, { signal, token: await getToken() }),
+    queryFn: async ({ signal }) => {
+      portfolioLoadStartedAt = Date.now();
+      return fetchSnapshot(uid!, { signal, token: await getToken() });
+    },
     enabled: status === 'signedIn' && !isDemo && Boolean(uid),
     staleTime: 60_000,
+    // One retry is enough; the persisted cache already keeps the UI usable
+    // while the backend wakes up.
+    retry: 1,
   });
 }
 
@@ -123,16 +135,43 @@ export function useFundHoldings(
 
   const errorQuery = queries.find((query) => query.error);
   const loading = queries.filter((query) => query.isLoading);
+  const enabled = status === 'signedIn' && !isDemo;
+  const total = enabled
+    ? unique.filter((fund) => !hasFundLookThrough(seeds?.[fund.symbol])).length
+    : 0;
+  // Only settled queries count; a query that has not started yet must not
+  // make the overall progress jump forward.
+  const completed = queries.filter(
+    (query, index) =>
+      !hasFundLookThrough(seeds?.[unique[index].symbol]) &&
+      (query.isSuccess || query.isError),
+  ).length;
 
   return {
     data,
     isLoading: loading.length > 0,
     error: (errorQuery?.error as Error | undefined) ?? null,
     pending: loading.length,
+    completed: Math.min(total, completed),
+    total,
     refetch: async () => {
       await Promise.all(queries.map((query) => query.refetch()));
     },
   };
+}
+
+export type PortfolioLoadStage = 'snapshot' | 'prices' | 'funds' | 'done';
+
+/** Raw loading state the UI turns into a progress bar and remaining-work copy. */
+export interface PortfolioLoadProgress {
+  /** Any first load still running. Background refetches are excluded. */
+  active: boolean;
+  stage: PortfolioLoadStage;
+  /** When the snapshot request started, for the shared time estimate. */
+  startedAt: number | null;
+  pricesDone: boolean;
+  fundsCompleted: number;
+  fundsTotal: number;
 }
 
 /**
@@ -237,6 +276,30 @@ export function usePortfolioData() {
     [analytics.allocationAnalysis, analytics.totals.portfolio, policyConfig],
   );
 
+  const snapshotLoading = isDemo ? false : snapshotQuery.isLoading;
+  // Treat a task as pending until it settles, not merely while a fetch is in
+  // flight. Otherwise the percentage can move backwards in the brief gap
+  // between the snapshot arriving and the dependent queries starting.
+  const pricesDone =
+    isDemo || symbols.length === 0 || pricesQuery.isSuccess || pricesQuery.isError;
+  const fundsDone =
+    isDemo || fundQuery.total === 0 || fundQuery.completed >= fundQuery.total;
+  const stage: PortfolioLoadStage = snapshotLoading
+    ? 'snapshot'
+    : !pricesDone
+      ? 'prices'
+      : !fundsDone
+        ? 'funds'
+        : 'done';
+  const progress: PortfolioLoadProgress = {
+    active: stage !== 'done',
+    stage,
+    startedAt: portfolioLoadStartedAt,
+    pricesDone,
+    fundsCompleted: isDemo ? 0 : fundQuery.completed,
+    fundsTotal: isDemo ? 0 : fundQuery.total,
+  };
+
   return {
     assets,
     savedAssets,
@@ -249,6 +312,8 @@ export function usePortfolioData() {
     policyEvaluation,
     fundCoverage: analytics.fundCoverage,
     isDemo,
+    progress,
+    lastSyncedAt: isDemo ? null : snapshotQuery.dataUpdatedAt || null,
     isLoading: isDemo ? false : snapshotQuery.isLoading,
     isRefreshing: isDemo
       ? false

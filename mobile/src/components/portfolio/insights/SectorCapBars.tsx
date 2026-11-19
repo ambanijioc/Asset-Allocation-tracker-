@@ -142,28 +142,25 @@ export function SectorCapBars({
                   </View>
 
                   <View style={styles.capLabels}>
-                    {entry.caps
-                      .slice()
-                      .sort((a, b) => b.value - a.value)
-                      .map((cap) => (
-                        <View key={cap.cap} style={styles.capLabel}>
-                          <View
-                            style={[
-                              styles.capDot,
-                              {
-                                backgroundColor:
-                                  capColors[cap.cap] ?? colors.textSecondary,
-                              },
-                            ]}
-                          />
-                          <Text style={[styles.capText, { color: colors.muted }]} numberOfLines={1}>
-                            {cap.cap.replace(' / Uncategorized', '')}{' '}
-                            {formatPercent(
-                              entry.total > 0 ? (cap.value / entry.total) * 100 : 0,
-                            )}
-                          </Text>
-                        </View>
-                      ))}
+                    {entry.caps.map((cap) => (
+                      <View key={cap.cap} style={styles.capLabel}>
+                        <View
+                          style={[
+                            styles.capDot,
+                            {
+                              backgroundColor:
+                                capColors[cap.cap] ?? colors.textSecondary,
+                            },
+                          ]}
+                        />
+                        <Text style={[styles.capText, { color: colors.muted }]} numberOfLines={1}>
+                          {cap.cap.replace(' / Uncategorized', '')}{' '}
+                          {formatPercent(
+                            entry.total > 0 ? (cap.value / entry.total) * 100 : 0,
+                          )}
+                        </Text>
+                      </View>
+                    ))}
                   </View>
                 </View>
               );

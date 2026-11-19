@@ -27,6 +27,8 @@ export interface PortfolioSummary {
   pnl: number;
   pnlPercent: number;
   assetCount: number;
+  /** Holdings valued by a live quote or a manual price. */
+  pricedCount: number;
   categories: number;
   allocation: AllocationSlice[];
   holdings: Holding[];
@@ -121,6 +123,7 @@ export function summarize(
     pnl,
     pnlPercent: investedValue > 0 ? (pnl / investedValue) * 100 : 0,
     assetCount: holdings.length,
+    pricedCount: holdings.filter((holding) => holding.hasLivePrice).length,
     categories: byCategory.size,
     allocation,
     holdings: sorted,

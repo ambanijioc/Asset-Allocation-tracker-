@@ -20,6 +20,7 @@ import { isExpoGo, isGoogleSignInConfigured } from '@/src/features/auth/google';
 import { usePortfolioData } from '@/src/features/portfolio/queries';
 import { APP_VERSION, env } from '@/src/lib/config/env';
 import { formatCompactINR, formatPercent } from '@/src/lib/format/money';
+import { formatRelativeTime, isStale } from '@/src/lib/format/time';
 import { radius, space, type } from '@/src/lib/theme/tokens';
 import { useTheme } from '@/src/lib/theme/ThemeProvider';
 
@@ -28,6 +29,9 @@ const THEME_OPTIONS = [
   { key: 'light', label: 'Light' },
   { key: 'dark', label: 'Dark' },
 ] as const;
+
+/** Render free instances sleep quickly, so older data is flagged as cached. */
+const SYNC_STALE_MS = 15 * 60_000;
 
 function initials(name: string): string {
   return name
@@ -55,7 +59,8 @@ export default function SettingsScreen() {
     linkGoogle,
     unlinkProvider,
   } = useAuth();
-  const { summary, policyConfig, policyEvaluation } = usePortfolioData();
+  const { summary, policyConfig, policyEvaluation, lastSyncedAt, progress, isRefreshing } =
+    usePortfolioData();
   const policyStatus = policyStatusView(policyEvaluation);
 
   const [showPasswordForm, setShowPasswordForm] = useState(false);
@@ -65,6 +70,23 @@ export default function SettingsScreen() {
 
   const displayName = user?.displayName?.trim() || user?.email?.split('@')[0] || 'Demo investor';
   const email = user?.email ?? 'demo@assettracker.app';
+  const syncIsStale = !isDemo && isStale(lastSyncedAt, SYNC_STALE_MS);
+  const noQuotes = !isDemo && summary.assetCount > 0 && summary.pricedCount === 0;
+  const policyTolerance =
+    policyEvaluation.targetedCount > 0
+      ? `${policyEvaluation.inToleranceCount}/${policyEvaluation.targetedCount} sleeves in tolerance`
+      : 'No sleeve targets';
+  const syncBadge = isDemo
+    ? ({ label: 'Demo', tone: 'warning' } as const)
+    : progress.active && lastSyncedAt == null
+      ? ({ label: 'Syncing', tone: 'accent' } as const)
+      : isRefreshing
+        ? ({ label: 'Refreshing', tone: 'accent' } as const)
+        : lastSyncedAt == null
+          ? ({ label: 'Not synced', tone: 'warning' } as const)
+          : syncIsStale
+            ? ({ label: 'Cached', tone: 'warning' } as const)
+            : ({ label: 'Synced', tone: 'positive' } as const);
 
   const confirmSignOut = () => {
     Alert.alert(
@@ -132,11 +154,18 @@ export default function SettingsScreen() {
               <Text style={[type.title, { color: colors.text }]} numberOfLines={1}>
                 {displayName}
               </Text>
-              <Badge label={isDemo ? 'Demo' : 'Synced'} tone={isDemo ? 'warning' : 'positive'} />
+              <Badge label={syncBadge.label} tone={syncBadge.tone} />
             </View>
             <Text style={[type.caption, { color: colors.muted }]} numberOfLines={1}>
               {email}
             </Text>
+            {!isDemo ? (
+              <Text style={[styles.syncText, { color: colors.muted }]} numberOfLines={1}>
+                {lastSyncedAt
+                  ? `Last synced ${formatRelativeTime(lastSyncedAt)}`
+                  : 'Waiting for the first sync'}
+              </Text>
+            ) : null}
           </View>
         </Card>
 
@@ -268,8 +297,20 @@ export default function SettingsScreen() {
             <View style={[styles.divider, { backgroundColor: colors.border }]} />
             <SummaryRow
               label="Unrealised P&L"
-              value={formatPercent(summary.pnlPercent, { signed: true })}
-              tone={summary.pnl >= 0 ? colors.positive : colors.negative}
+              value={
+                noQuotes
+                  ? 'Awaiting live quotes'
+                  : `${summary.pnl >= 0 ? '+' : '-'}${formatCompactINR(
+                      Math.abs(summary.pnl),
+                    )} · ${formatPercent(summary.pnlPercent, { signed: true })}`
+              }
+              tone={
+                noQuotes
+                  ? colors.muted
+                  : summary.pnl >= 0
+                    ? colors.positive
+                    : colors.negative
+              }
             />
             <View style={[styles.divider, { backgroundColor: colors.border }]} />
             <SummaryRow label="Holdings" value={`${summary.assetCount}`} />
@@ -297,7 +338,7 @@ export default function SettingsScreen() {
                     ? `Policy v${policyConfig.policy.version} · targets total ${formatPercent(
                         policyEvaluation.targetSum,
                       )}`
-                    : `Policy v${policyConfig.policy.version} · ${policyEvaluation.inToleranceCount}/${policyEvaluation.targetedCount} in tolerance`}
+                    : `Policy v${policyConfig.policy.version} · ${policyTolerance}`}
               </Text>
             </View>
             <Badge label={policyStatus.badgeLabel} tone={policyStatus.badgeTone} />
@@ -380,6 +421,11 @@ export default function SettingsScreen() {
           size="lg"
         />
 
+        <Text style={[styles.disclaimer, { color: colors.muted }]}>
+          Market data may be delayed. Values are for tracking only and are not investment
+          advice.
+        </Text>
+
         <Text style={[styles.footer, { color: colors.muted }]}>
           Asset Tracker · Built with Expo and React Native
         </Text>
@@ -417,6 +463,7 @@ const styles = StyleSheet.create({
   avatar: { width: 48, height: 48, borderRadius: radius.lg, alignItems: 'center', justifyContent: 'center' },
   avatarText: { fontSize: 15, fontWeight: '700' },
   accountText: { flex: 1, gap: 2 },
+  syncText: { fontSize: 10 },
   nameRow: { flexDirection: 'row', alignItems: 'center', gap: space.sm, flexWrap: 'wrap' },
   summaryCard: { gap: space.md },
   card: { gap: space.md },
@@ -445,5 +492,11 @@ const styles = StyleSheet.create({
   infoRow: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
   infoValue: { fontSize: 12, flexShrink: 1, maxWidth: '55%', textAlign: 'right' },
   divider: { height: StyleSheet.hairlineWidth },
+  disclaimer: {
+    fontSize: 10,
+    lineHeight: 15,
+    textAlign: 'center',
+    paddingHorizontal: space.lg,
+  },
   footer: { fontSize: 11, textAlign: 'center', marginTop: space.sm },
 });

@@ -1,7 +1,20 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { createAsyncStoragePersister } from '@tanstack/query-async-storage-persister';
 import { QueryClient, focusManager } from '@tanstack/react-query';
 import { AppState, type AppStateStatus } from 'react-native';
 
 import { ApiError } from '@/src/lib/api/client';
+
+/**
+ * Keeps the last successfully loaded portfolio on the device. The Render free
+ * instance can take tens of seconds to wake up, so a cold app launch shows the
+ * previous snapshot immediately while the fresh copy loads in the background.
+ */
+export const queryPersister = createAsyncStoragePersister({
+  storage: AsyncStorage,
+  key: 'asset-tracker/query-cache',
+  throttleTime: 2_000,
+});
 
 /**
  * AppState is React Native's equivalent of window focus. Wiring it into

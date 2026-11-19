@@ -49,6 +49,18 @@ EXPO_PUBLIC_FORCE_DEMO=1
 Use your machine's LAN address when the backend runs elsewhere. Never put
 secrets in `EXPO_PUBLIC_*` variables — they are inlined into the bundle.
 
+### Startup performance
+
+The last successful portfolio response is persisted in AsyncStorage, so a cold
+launch renders the previous dashboard immediately and refreshes in the
+background. The first launch after installing (or clearing app storage) still
+needs the network; the dashboard explains the wait after six seconds.
+
+The deployed Render service uses the free plan, which sleeps after roughly 15
+minutes without traffic. Waking it can take tens of seconds. Keep the service
+warm with an uptime monitor or move it to a paid instance if first-load latency
+matters. The app's snapshot request allows 45 seconds for that wake-up.
+
 ## Architecture
 
 ```

@@ -10,6 +10,7 @@ import { Banner } from '@/src/components/ui/Banner';
 import { Button } from '@/src/components/ui/Button';
 import { Card } from '@/src/components/ui/Card';
 import { IconButton } from '@/src/components/ui/IconButton';
+import { LoadingProgress } from '@/src/components/ui/LoadingProgress';
 import { Screen } from '@/src/components/ui/Screen';
 import { ScreenHeader } from '@/src/components/ui/ScreenHeader';
 import { SectionHeader } from '@/src/components/ui/SectionHeader';
@@ -18,6 +19,7 @@ import { EmptyState, ErrorState } from '@/src/components/ui/States';
 import { useAuth } from '@/src/features/auth/AuthProvider';
 import { usePortfolioData } from '@/src/features/portfolio/queries';
 import { formatCompactINR, formatPercent } from '@/src/lib/format/money';
+import { formatRelativeTime } from '@/src/lib/format/time';
 import { numeric, space, type } from '@/src/lib/theme/tokens';
 import { useTheme } from '@/src/lib/theme/ThemeProvider';
 
@@ -36,6 +38,8 @@ export default function DashboardScreen() {
     summary,
     policyConfig,
     policyEvaluation,
+    progress,
+    lastSyncedAt,
     isLoading,
     isRefreshing,
     error,
@@ -59,6 +63,10 @@ export default function DashboardScreen() {
     })),
   ].filter((slice) => slice.value > 0);
 
+  const toleranceLabel =
+    policyEvaluation.targetedCount > 0
+      ? `${policyEvaluation.inToleranceCount}/${policyEvaluation.targetedCount} sleeves in tolerance`
+      : 'no sleeve targets';
   const policySubtitle = policyEvaluation.isTemplate
     ? isDemo
       ? 'Default template · read-only in demo'
@@ -67,18 +75,27 @@ export default function DashboardScreen() {
       ? `Policy v${policyConfig.policy.version} · targets total ${formatPercent(
           policyEvaluation.targetSum,
         )}`
-      : `Policy v${policyConfig.policy.version} · ${policyEvaluation.inToleranceCount}/${policyEvaluation.targetedCount} in tolerance${
+      : `Policy v${policyConfig.policy.version} · ${toleranceLabel}${
           policyEvaluation.unmanaged.length > 0
-            ? ` · ${formatPercent(policyEvaluation.unmanagedPercentage)} outside policy`
+            ? ` · ${formatPercent(policyEvaluation.unmanagedPercentage)} unmanaged`
             : ''
         }`;
+
+  const syncedLabel = lastSyncedAt ? formatRelativeTime(lastSyncedAt) : null;
+  const subtitle = isDemo
+    ? 'Demo portfolio · read-only'
+    : isRefreshing && syncedLabel
+      ? 'Refreshing your portfolio…'
+      : syncedLabel
+        ? `Updated ${syncedLabel} · ${summary.assetCount} holdings`
+        : 'Your portfolio at a glance';
 
   return (
     <Screen refreshing={isRefreshing} onRefresh={refetch}>
       <ScreenHeader
         eyebrow={greeting()}
         title={`Hi, ${firstName}`}
-        subtitle={isDemo ? 'Demo portfolio · read-only' : 'Your portfolio at a glance'}
+        subtitle={subtitle}
         size="large"
         action={
           <View style={styles.headerActions}>
@@ -117,7 +134,10 @@ export default function DashboardScreen() {
             />
           </Card>
         ) : isLoading ? (
-          <DashboardSkeleton />
+          <>
+            <LoadingProgress progress={progress} />
+            <DashboardSkeleton />
+          </>
         ) : summary.assetCount === 0 ? (
           <Card>
             <EmptyState
@@ -130,6 +150,8 @@ export default function DashboardScreen() {
           </Card>
         ) : (
           <>
+            {progress.active ? <LoadingProgress progress={progress} compact /> : null}
+
             <KpiGrid
               summary={summary}
               policy={policyEvaluation}
