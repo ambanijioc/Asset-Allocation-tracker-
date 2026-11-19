@@ -10,7 +10,7 @@ import { useMemo } from 'react';
 import { useAuth } from '@/src/features/auth/AuthProvider';
 
 import { DEFAULT_USD_TO_INR, flattenAssets, summarize } from './aggregate';
-import { analyzePortfolio, hasFundLookThrough } from './analytics';
+import { analyzePortfolio, DEFAULT_IDEAL_ALLOCATION, hasFundLookThrough } from './analytics';
 import {
   fetchFundData,
   fetchPrices,
@@ -239,7 +239,12 @@ export function usePortfolioData() {
   const fundHoldings = isDemo ? demoFundHoldings : fundQuery.data;
 
   const policyConfig = useMemo<PolicyConfig>(() => {
-    if (isDemo) return resolvePolicyConfig({});
+    // The demo ships with the default targets treated as a confirmed policy so
+    // the allocation health card and planner are fully explorable. Writes stay
+    // disabled: policy editing and rebalance recording remain read-only.
+    if (isDemo) {
+      return resolvePolicyConfig({ settingsAllocation: DEFAULT_IDEAL_ALLOCATION });
+    }
 
     const snapshot = snapshotQuery.data;
     return resolvePolicyConfig({

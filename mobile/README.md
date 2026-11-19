@@ -61,6 +61,19 @@ minutes without traffic. Waking it can take tens of seconds. Keep the service
 warm with an uptime monitor or move it to a paid instance if first-load latency
 matters. The app's snapshot request allows 45 seconds for that wake-up.
 
+### Tests
+
+```bash
+cd mobile
+npm test
+```
+
+The planner suite (`src/features/portfolio/__tests__/rebalance.test.ts`) covers
+contribution-first ordering, the no-action and no-targets states, optional
+trims, reinvested trim proceeds, the cash reserve floor, and unmanaged value
+outside policy. The tests use the real policy evaluation so the planner runs
+against the same types as the app.
+
 ## Architecture
 
 ```
