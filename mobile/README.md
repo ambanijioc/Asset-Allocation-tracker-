@@ -67,6 +67,8 @@ matters. The app's snapshot request allows 45 seconds for that wake-up.
 app/                      routes only
   (tabs)/                 Allocation (home) · Holdings · Insights · Research · Settings
   screener.tsx            stock screener (opened from Research)
+  policy.tsx              sleeve targets, bands and review cadence (modal)
+  rebalance.tsx           contribution-first rebalance planner
   asset/new.tsx           add holding (modal)
   asset/[id]/             detail + edit (modal)
   assistant.tsx           read-only AI chat + model picker (modal)
@@ -112,6 +114,34 @@ allocation or the default 60/20/5/5/10 policy.
 Fund data cached on the user snapshot is used first. Missing schemes are fetched
 lazily from `/api/holdings` and cached in TanStack Query for a day. The bundled
 demo portfolio ships with sample scheme holdings so every chart renders offline.
+
+### Rebalance planner
+
+**Allocation health → Next** and **Drift & rebalance → Build rebalance plan**
+open `/rebalance`. The planner is contribution-first:
+
+1. New money is sized against the **post-contribution** portfolio and funds the
+   largest underweight gap first, until the contribution runs out or every
+   sleeve reaches target. Leftover money is invested by target weight.
+2. Trims are off by default. When enabled, they only activate if new money alone
+   leaves a sleeve outside its band. Every above-target sleeve is then sold back
+   to target and the proceeds fund the remaining gaps. Cash is never trimmed
+   below the policy's `minCashPct` reserve floor; any cash held above target to
+   respect that floor is called out in the plan.
+3. Targets and drift are measured against the **whole portfolio**, including
+   holdings without a policy sleeve. That value appears as an outside-policy gap
+   the plan cannot close, keeping the projection consistent with the health card.
+
+At ₹0 contribution with trims off, the screen is a diagnosis: it shows whether
+action is needed, the size of the underweight and overweight gaps, and what new
+money would do. Any amount can be simulated with presets, and the projection
+card shows current versus after-trade weights, drift and band status per sleeve.
+
+**Mark rebalanced** writes a local audit record (date, contribution, bought,
+sold, projected worst drift, policy version) scoped to the signed-in user or
+demo. It never rewrites holdings, so drift remains truthful until the underlying
+positions are updated. Records are stored in AsyncStorage, newest first, and are
+not synced to the backend.
 
 ### AI assistant
 

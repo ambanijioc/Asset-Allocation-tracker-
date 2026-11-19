@@ -195,6 +195,7 @@ export default function AllocationHomeScreen() {
               policyVersion={policyConfig.policy.version}
               readOnly={isDemo}
               onManageTargets={() => router.push('/policy')}
+              onPlanRebalance={() => router.push('/rebalance')}
             />
 
             {priceError ? (
@@ -206,7 +207,10 @@ export default function AllocationHomeScreen() {
             ) : null}
 
             {!needsTargets && offPolicy.length > 0 ? (
-              <DriftMonitor sleeves={offPolicy} />
+              <DriftMonitor
+                sleeves={offPolicy}
+                onPlanRebalance={() => router.push('/rebalance')}
+              />
             ) : null}
 
             <PortfolioStrip summary={summary} />
@@ -396,10 +400,11 @@ function StripStat({ label, value, hint, tone, accessibilityLabel }: StripStatPr
 
 interface DriftMonitorProps {
   sleeves: PolicySleeveEvaluation[];
+  onPlanRebalance: () => void;
 }
 
 /** Off-target sleeves with the rupee size of the rebalancing gap. */
-function DriftMonitor({ sleeves }: DriftMonitorProps) {
+function DriftMonitor({ sleeves, onPlanRebalance }: DriftMonitorProps) {
   const { colors } = useTheme();
   const overweight = sleeves.filter((sleeve) => sleeve.driftPp > 0).length;
   const underweight = sleeves.filter((sleeve) => sleeve.driftPp < 0).length;
@@ -476,6 +481,14 @@ function DriftMonitor({ sleeves }: DriftMonitorProps) {
           Rebalance with new contributions first, then trim overweight sleeves. Bands apply to
           each sleeve independently.
         </Text>
+        <Button
+          label="Build rebalance plan"
+          icon="sliders"
+          variant="secondary"
+          size="sm"
+          fullWidth
+          onPress={onPlanRebalance}
+        />
       </View>
     </Card>
   );
@@ -594,7 +607,11 @@ const styles = StyleSheet.create({
   driftHint: { fontSize: 10, marginTop: 1 },
   driftRight: { alignItems: 'flex-end', gap: 3 },
   driftPercent: { fontSize: 12, fontWeight: '600' },
-  driftFooter: { borderTopWidth: StyleSheet.hairlineWidth, paddingTop: space.sm },
+  driftFooter: {
+    gap: space.sm,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    paddingTop: space.sm,
+  },
   driftFooterText: { fontSize: 10, lineHeight: 15 },
   unmanagedCard: { gap: space.md },
   unmanagedHeader: { flexDirection: 'row', alignItems: 'center', gap: space.md },

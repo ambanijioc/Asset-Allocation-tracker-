@@ -22,6 +22,8 @@ interface AllocationHealthCardProps {
   policyVersion: number;
   readOnly?: boolean;
   onManageTargets: () => void;
+  /** Opens the full rebalance planner when targets are usable. */
+  onPlanRebalance?: () => void;
 }
 
 /**
@@ -34,6 +36,7 @@ export function AllocationHealthCard({
   policyVersion,
   readOnly = false,
   onManageTargets,
+  onPlanRebalance,
 }: AllocationHealthCardProps) {
   const { colors } = useTheme();
   const {
@@ -229,13 +232,32 @@ export function AllocationHealthCard({
         </View>
       ) : null}
 
-      <View style={[styles.nextAction, { backgroundColor: colors.cardMuted }]}>
-        <Feather name={nextIcon} size={13} color={actionTone} />
-        <Text style={[styles.nextActionText, { color: colors.textSecondary }]}>
-          <Text style={[styles.nextActionLabel, { color: colors.text }]}>Next: </Text>
-          {nextAction}
-        </Text>
-      </View>
+      {onPlanRebalance && !needsTargets ? (
+        <Pressable
+          onPress={onPlanRebalance}
+          accessibilityRole="button"
+          accessibilityLabel={`Build rebalance plan. ${nextAction}`}
+          style={({ pressed }) => [
+            styles.nextAction,
+            { backgroundColor: colors.cardMuted, opacity: pressed ? 0.7 : 1 },
+          ]}
+        >
+          <Feather name={nextIcon} size={13} color={actionTone} />
+          <Text style={[styles.nextActionText, { color: colors.textSecondary }]}>
+            <Text style={[styles.nextActionLabel, { color: colors.text }]}>Next: </Text>
+            {nextAction}
+          </Text>
+          <Feather name="chevron-right" size={14} color={colors.muted} />
+        </Pressable>
+      ) : (
+        <View style={[styles.nextAction, { backgroundColor: colors.cardMuted }]}>
+          <Feather name={nextIcon} size={13} color={actionTone} />
+          <Text style={[styles.nextActionText, { color: colors.textSecondary }]}>
+            <Text style={[styles.nextActionLabel, { color: colors.text }]}>Next: </Text>
+            {nextAction}
+          </Text>
+        </View>
+      )}
 
       <View style={[styles.footer, { borderTopColor: colors.border }]}>
         <Text style={[styles.footerText, { color: colors.muted }]} numberOfLines={1}>

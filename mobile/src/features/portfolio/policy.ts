@@ -60,6 +60,18 @@ const FALLBACK_COLORS = [
 
 export type PolicyStatus = 'within' | 'watch' | 'breach';
 
+/**
+ * One drift rule for the policy evaluation and the rebalance simulator. A
+ * sleeve is a breach outside its band, a watch from three quarters of the band,
+ * and within tolerance otherwise.
+ */
+export function statusForDrift(driftPp: number, bandPp: number): PolicyStatus {
+  const magnitude = Math.abs(driftPp);
+  if (magnitude > bandPp) return 'breach';
+  if (magnitude >= bandPp * 0.75) return 'watch';
+  return 'within';
+}
+
 export type PolicyOverallStatus =
   | 'on-policy'
   | 'watch'
@@ -342,12 +354,7 @@ export function evaluatePolicy(input: {
     const currentValue = node?.currentValue ?? 0;
     const currentPercentage = total > 0 ? (currentValue / total) * 100 : 0;
     const driftPp = currentPercentage - targetPercentage;
-    const status: PolicyStatus =
-      Math.abs(driftPp) > bandPp
-        ? 'breach'
-        : Math.abs(driftPp) >= bandPp * 0.75
-          ? 'watch'
-          : 'within';
+    const status = statusForDrift(driftPp, bandPp);
 
     return {
       path,

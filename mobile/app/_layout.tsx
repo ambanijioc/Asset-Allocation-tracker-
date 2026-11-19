@@ -89,6 +89,7 @@ function RootNavigator() {
       >
         <Stack.Screen name="login" options={{ animation: 'fade' }} />
         <Stack.Screen name="(tabs)" />
+        <Stack.Screen name="rebalance" />
         <Stack.Screen
           name="policy"
           options={{ presentation: 'modal', animation: 'slide_from_bottom' }}
