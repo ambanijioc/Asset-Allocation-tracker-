@@ -55,6 +55,23 @@ export default function AllocationScreen() {
     targetSum,
   } = policyEvaluation;
   const status = policyStatusView(policyEvaluation);
+  const policyNeedsAttention = isTemplate || !isValid || targetedCount === 0;
+  const toleranceIsComplete =
+    !policyNeedsAttention && inToleranceCount === targetedCount;
+  const toleranceTone = policyNeedsAttention
+    ? colors.muted
+    : toleranceIsComplete
+      ? colors.positive
+      : inToleranceCount === 0
+        ? colors.negative
+        : colors.warning;
+  const toleranceIcon: ComponentProps<typeof Feather>['name'] = policyNeedsAttention
+    ? 'minus-circle'
+    : toleranceIsComplete
+      ? 'check-circle'
+      : inToleranceCount === 0
+        ? 'alert-triangle'
+        : 'alert-circle';
   const offPolicy = sleeves
     .filter((sleeve) => sleeve.status !== 'within')
     .sort((a, b) => Math.abs(b.driftPp) - Math.abs(a.driftPp));
@@ -148,7 +165,7 @@ export default function AllocationScreen() {
                   value={formatCompactINR(analytics.totals.portfolio)}
                   hint={`${summary.assetCount} ${summary.assetCount === 1 ? 'asset' : 'assets'}`}
                   icon="pie-chart"
-                  color="#2563EB"
+                  color={colors.accent}
                 />
                 <View style={[styles.summaryDivider, { backgroundColor: colors.border }]} />
                 <SummaryStat
@@ -174,7 +191,7 @@ export default function AllocationScreen() {
                           : `${targetedCount} sleeves`
                   }
                   icon="sliders"
-                  color="#D97706"
+                  color={policyNeedsAttention ? colors.warning : colors.accent}
                 />
                 <View style={[styles.summaryDivider, { backgroundColor: colors.border }]} />
                 <SummaryStat
@@ -197,8 +214,9 @@ export default function AllocationScreen() {
                           ? 'Fix targets'
                           : 'Sleeve-level bands'
                   }
-                  icon="check-circle"
-                  color="#059669"
+                  icon={toleranceIcon}
+                  color={toleranceTone}
+                  valueColor={toleranceTone}
                 />
               </View>
             </Card>
@@ -254,9 +272,10 @@ interface SummaryStatProps {
   hint: string;
   icon: ComponentProps<typeof Feather>['name'];
   color: string;
+  valueColor?: string;
 }
 
-function SummaryStat({ label, value, hint, icon, color }: SummaryStatProps) {
+function SummaryStat({ label, value, hint, icon, color, valueColor }: SummaryStatProps) {
   const { colors } = useTheme();
 
   return (
@@ -268,7 +287,7 @@ function SummaryStat({ label, value, hint, icon, color }: SummaryStatProps) {
         </Text>
       </View>
       <Text
-        style={[styles.summaryValue, numeric, { color: colors.text }]}
+        style={[styles.summaryValue, numeric, { color: valueColor ?? colors.text }]}
         numberOfLines={1}
         adjustsFontSizeToFit
         minimumFontScale={0.72}
@@ -290,25 +309,32 @@ interface DriftMonitorProps {
 function DriftMonitor({ sleeves }: DriftMonitorProps) {
   const { colors } = useTheme();
   const overweight = sleeves.filter((sleeve) => sleeve.driftPp > 0).length;
-  const underweight = sleeves.length - overweight;
+  const underweight = sleeves.filter((sleeve) => sleeve.driftPp < 0).length;
   const breaches = sleeves.filter((sleeve) => sleeve.status === 'breach').length;
   const watches = sleeves.length - breaches;
+  const alertTone = breaches > 0 ? colors.negative : colors.warning;
+  const alertSoft = breaches > 0 ? colors.negativeSoft : colors.warningSoft;
 
   return (
     <Card style={styles.driftCard}>
       <View style={styles.driftHeader}>
-        <View style={[styles.driftIcon, { backgroundColor: colors.warningSoft }]}>
-          <Feather name="activity" size={15} color={colors.warning} />
+        <View style={[styles.driftIcon, { backgroundColor: alertSoft }]}>
+          <Feather name="activity" size={15} color={alertTone} />
         </View>
         <View style={styles.driftHeaderText}>
           <Text style={[type.title, { color: colors.text }]}>Drift monitor</Text>
           <Text style={[type.caption, { color: colors.muted, marginTop: 2 }]}>
             {breaches > 0
-              ? `${breaches} outside band${watches > 0 ? ` · ${watches} near band` : ''}`
+              ? `${breaches} sleeve${breaches === 1 ? '' : 's'} outside band${
+                  watches > 0 ? ` · ${watches} near band` : ''
+                }`
               : `${watches} nearing tolerance`}
           </Text>
         </View>
-        <Badge label={`${overweight} over · ${underweight} under`} tone="warning" />
+        <Badge
+          label={`${overweight} over · ${underweight} under`}
+          tone={breaches > 0 ? 'negative' : 'warning'}
+        />
       </View>
 
       <View style={styles.driftRows}>

@@ -373,7 +373,10 @@ export function evaluatePolicy(input: {
       currentValue: node.currentValue,
       currentPercentage: total > 0 ? (node.currentValue / total) * 100 : 0,
       color: colorForSleeve(node.fullPath, targetPaths.length + index),
-    }));
+    }))
+    // Holdings that round to 0.00% of the portfolio are valuation dust, not an
+    // actionable policy exception. Keep the threshold visible in the UI honest.
+    .filter((slice) => slice.currentPercentage >= 0.01);
 
   const withinCount = sleeves.filter((sleeve) => sleeve.status === 'within').length;
   const watchCount = sleeves.filter((sleeve) => sleeve.status === 'watch').length;
