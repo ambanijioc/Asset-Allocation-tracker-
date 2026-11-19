@@ -113,6 +113,8 @@ describe('planRebalance', () => {
     expect(plan.status).toBe('fund');
     expect(plan.buys.map((row) => row.path)).toEqual(['Equities']);
     expect(rowFor(plan, 'Equities').buyAmount).toBeCloseTo(10_000, 3);
+    expect(rowFor(plan, 'Equities').contributionAmount).toBeCloseTo(10_000, 3);
+    expect(rowFor(plan, 'Equities').proceedsAmount).toBe(0);
     expect(plan.totalBuy).toBeCloseTo(10_000, 3);
     expect(plan.totalSell).toBe(0);
     expect(plan.afterContribution.breachCount).toBeGreaterThan(0);
@@ -161,6 +163,8 @@ describe('planRebalance', () => {
     expect(plan.totalBuy).toBeCloseTo(20_000, 3);
     expect(rowFor(plan, 'Equities').sellAmount).toBeCloseTo(20_000, 3);
     expect(rowFor(plan, 'Fixed Income').buyAmount).toBeCloseTo(20_000, 3);
+    expect(rowFor(plan, 'Fixed Income').contributionAmount).toBe(0);
+    expect(rowFor(plan, 'Fixed Income').proceedsAmount).toBeCloseTo(20_000, 3);
     expect(plan.after.breachCount).toBe(0);
   });
 
@@ -174,7 +178,10 @@ describe('planRebalance', () => {
     expect(plan.status).toBe('fund-and-trim');
     expect(plan.totalSell).toBeCloseTo(15_000, 3);
     expect(plan.totalBuy).toBeCloseTo(25_000, 3);
-    expect(rowFor(plan, 'Fixed Income').buyAmount).toBeCloseTo(25_000, 3);
+    const funded = rowFor(plan, 'Fixed Income');
+    expect(funded.buyAmount).toBeCloseTo(25_000, 3);
+    expect(funded.contributionAmount).toBeCloseTo(10_000, 3);
+    expect(funded.proceedsAmount).toBeCloseTo(15_000, 3);
     expect(plan.after.breachCount).toBe(0);
   });
 
@@ -188,6 +195,8 @@ describe('planRebalance', () => {
     expect(rowFor(plan, 'Cash').sellAmount).toBeCloseTo(15_000, 3);
     expect(rowFor(plan, 'Cash').projectedValue).toBeCloseTo(25_000, 3);
     expect(rowFor(plan, 'Equities').buyAmount).toBeCloseTo(15_000, 3);
+    expect(rowFor(plan, 'Equities').contributionAmount).toBe(0);
+    expect(rowFor(plan, 'Equities').proceedsAmount).toBeCloseTo(15_000, 3);
     expect(plan.cashFloorHeld).toBeCloseTo(5_000, 3);
     expect(plan.unfundedGap).toBeCloseTo(5_000, 3);
     expect(plan.after.breachCount).toBe(1);

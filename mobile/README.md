@@ -71,8 +71,11 @@ npm test
 The planner suite (`src/features/portfolio/__tests__/rebalance.test.ts`) covers
 contribution-first ordering, the no-action and no-targets states, optional
 trims, reinvested trim proceeds, the cash reserve floor, and unmanaged value
-outside policy. The tests use the real policy evaluation so the planner runs
-against the same types as the app.
+outside policy. The SIP suite
+(`src/features/portfolio/__tests__/sip.test.ts`) covers nested holding mapping,
+dominant-sleeve dedupe, proportional splits, exclusions and unassigned money,
+and sleeves with no holdings. The tests use the real policy evaluation so the
+planner runs against the same types as the app.
 
 ## Architecture
 
@@ -149,6 +152,22 @@ At ₹0 contribution with trims off, the screen is a diagnosis: it shows whether
 action is needed, the size of the underweight and overweight gaps, and what new
 money would do. Any amount can be simulated with presets, and the projection
 card shows current versus after-trade weights, drift and band status per sleeve.
+
+#### SIP auto-fill
+
+When a contribution is entered, **SIP auto-fill** turns the sleeve plan into a
+per-holding split. Each funded sleeve gets its planned rupee amount, then
+divides that amount across the sleeve's current holdings in proportion to their
+value, preserving today's composition by default. Every row shows both the
+rupee amount and its share of the money entered. Tap a holding to exclude it;
+the sleeve amount is redistributed across the remaining selected holdings. If
+no holding is selected, or a funded sleeve has no existing holding, the amount
+stays visible as unassigned instead of silently moving elsewhere.
+
+Trim proceeds are deliberately excluded from this section: they are internal
+reallocations, not new money, so the percentages always add up to the
+contribution the user typed. The section is guidance only and does not create
+orders or change holdings.
 
 **Mark rebalanced** writes a local audit record (date, contribution, bought,
 sold, projected worst drift, policy version) scoped to the signed-in user or

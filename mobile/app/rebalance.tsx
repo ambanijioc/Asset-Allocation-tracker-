@@ -2,7 +2,7 @@ import { Feather } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import type { ComponentProps } from 'react';
 import { useMemo, useState } from 'react';
-import { StyleSheet, Switch, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Switch, Text, View } from 'react-native';
 
 import { Badge, type BadgeTone } from '@/src/components/ui/Badge';
 import { Banner } from '@/src/components/ui/Banner';
@@ -28,6 +28,7 @@ import {
   useRebalanceJournal,
   type RebalanceRecord,
 } from '@/src/features/portfolio/rebalanceJournal';
+import { buildSipPlan, type SipPlan } from '@/src/features/portfolio/sip';
 import {
   formatCompactINR,
   formatDriftPp,
@@ -171,6 +172,7 @@ export default function RebalanceScreen() {
   const {
     summary,
     progress,
+    analytics,
     policyConfig,
     policyEvaluation,
     isLoading,
@@ -184,6 +186,10 @@ export default function RebalanceScreen() {
 
   const [contributionText, setContributionText] = useState('');
   const [trimOverweight, setTrimOverweight] = useState(false);
+  // Keyed by `sleeve::symbol` so the choice survives contribution edits.
+  const [sipExcluded, setSipExcluded] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
 
   const contribution = useMemo(() => {
     const rupees = Number(contributionText);
@@ -209,6 +215,28 @@ export default function RebalanceScreen() {
   const hasOverweight = policyEvaluation.sleeves.some(
     (sleeve) => sleeve.currentValue > sleeve.targetValue + 1,
   );
+
+  const sipPlan = useMemo(
+    () =>
+      buildSipPlan({
+        rows: plan.rows,
+        nodes: analytics.allocationAnalysis,
+        contribution: plan.contribution,
+        excluded: sipExcluded,
+      }),
+    [plan.rows, plan.contribution, analytics.allocationAnalysis, sipExcluded],
+  );
+
+  const toggleSipAsset = (key: string) => {
+    setSipExcluded((previous) => {
+      const next = new Set(previous);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  const resetSipSelection = () => setSipExcluded(new Set());
 
   const handleRecord = async (): Promise<string | null> => {
     const saved = await record({
@@ -399,6 +427,13 @@ export default function RebalanceScreen() {
                 </View>
 
                 <TradesCard plan={plan} />
+                {plan.contribution > 0 ? (
+                  <SipCard
+                    sip={sipPlan}
+                    onToggle={toggleSipAsset}
+                    onReset={resetSipSelection}
+                  />
+                ) : null}
                 <ProjectionCard
                   plan={plan}
                   minCashPct={policyConfig.policy.rebalance.minCashPct}
@@ -787,6 +822,213 @@ function TradeTotal({ label, value }: { label: string; value: string }) {
   );
 }
 
+function SipCard({
+  sip,
+  onToggle,
+  onReset,
+}: {
+  sip: SipPlan;
+  onToggle: (key: string) => void;
+  onReset: () => void;
+}) {
+  const { colors } = useTheme();
+  const assignedPercentage =
+    sip.contribution > 0 ? (sip.allocated / sip.contribution) * 100 : 0;
+  const hasUnallocated = sip.unallocated > 50;
+  const canReset = sip.selectedCount < sip.availableCount;
+
+  return (
+    <View>
+      <SectionHeader
+        title="SIP auto-fill"
+        subtitle="New money by holding"
+        trailing={
+          <Badge
+            label={`${Math.round(assignedPercentage)}% assigned`}
+            tone={hasUnallocated ? 'warning' : 'positive'}
+          />
+        }
+      />
+      <Card padded={false} style={styles.sipCard}>
+        <View style={[styles.sipSummary, { borderBottomColor: colors.border }]}>
+          <View style={styles.sipSummaryText}>
+            <Text style={[type.bodyMedium, { color: colors.text }]}>
+              {formatINR(sip.contribution)} to invest
+            </Text>
+            <Text style={[styles.sipHint, { color: colors.muted }]}>
+              New money funds the largest underweight sleeve first, then follows
+              that sleeve&apos;s current holdings. Tap a holding to leave it out.
+            </Text>
+          </View>
+          {canReset ? (
+            <Chip label="Reset" icon="rotate-ccw" onPress={onReset} />
+          ) : null}
+        </View>
+
+        {sip.sleeves.map((sleeve, index) => (
+          <View
+            key={sleeve.path}
+            style={[
+              styles.sipSleeve,
+              index > 0
+                ? {
+                    borderTopWidth: StyleSheet.hairlineWidth,
+                    borderTopColor: colors.border,
+                  }
+                : null,
+            ]}
+          >
+            <View style={styles.sipSleeveHeader}>
+              <View style={[styles.dot, { backgroundColor: sleeve.color }]} />
+              <Text
+                style={[styles.sipSleeveName, { color: colors.text }]}
+                numberOfLines={1}
+              >
+                {sleeve.label}
+              </Text>
+              <Text
+                style={[styles.sipSleeveAmount, numeric, { color: colors.text }]}
+                numberOfLines={1}
+              >
+                {formatINR(sleeve.amount)}
+              </Text>
+              <Text
+                style={[
+                  styles.sipSleevePercent,
+                  numeric,
+                  { color: colors.muted },
+                ]}
+                numberOfLines={1}
+              >
+                {formatPercent(sleeve.percentOfContribution)}
+              </Text>
+            </View>
+
+            {sleeve.assets.length === 0 ? (
+              <View style={styles.sipEmpty}>
+                <Feather name="info" size={13} color={colors.warning} />
+                <Text style={[styles.sipEmptyText, { color: colors.muted }]}>
+                  No holding in this sleeve yet. {formatINR(sleeve.amount)} stays
+                  unassigned until you add one.
+                </Text>
+              </View>
+            ) : (
+              sleeve.assets.map((asset) => (
+                <Pressable
+                  key={asset.key}
+                  onPress={() => onToggle(asset.key)}
+                  accessibilityRole="checkbox"
+                  accessibilityState={{ checked: asset.selected }}
+                  accessibilityLabel={`${asset.name}, ${
+                    asset.selected
+                      ? `${formatINR(asset.amount)} of ${formatINR(
+                          sip.contribution,
+                        )}`
+                      : 'excluded from this SIP'
+                  }`}
+                  style={({ pressed }) => [
+                    styles.sipAsset,
+                    !asset.selected ? styles.sipAssetExcluded : null,
+                    pressed ? styles.sipAssetPressed : null,
+                  ]}
+                >
+                  <View
+                    style={[
+                      styles.sipCheck,
+                      asset.selected
+                        ? {
+                            backgroundColor: colors.accent,
+                            borderColor: colors.accent,
+                          }
+                        : { borderColor: colors.border },
+                    ]}
+                  >
+                    {asset.selected ? (
+                      <Feather name="check" size={11} color={colors.accentText} />
+                    ) : null}
+                  </View>
+                  <View style={styles.sipAssetBody}>
+                    <Text
+                      style={[styles.sipAssetName, { color: colors.text }]}
+                      numberOfLines={1}
+                    >
+                      {asset.name}
+                    </Text>
+                    <Text
+                      style={[styles.sipAssetMeta, { color: colors.muted }]}
+                      numberOfLines={1}
+                    >
+                      {asset.symbol
+                        ? `${asset.symbol} · held ${formatCompactINR(
+                            asset.currentValue,
+                          )}`
+                        : `Held ${formatCompactINR(asset.currentValue)}`}
+                    </Text>
+                  </View>
+                  <View style={styles.sipAssetAmounts}>
+                    <Text
+                      style={[
+                        styles.sipAssetAmount,
+                        numeric,
+                        { color: asset.selected ? colors.text : colors.muted },
+                      ]}
+                      numberOfLines={1}
+                    >
+                      {formatINR(asset.amount)}
+                    </Text>
+                    <Text
+                      style={[styles.sipAssetPercent, { color: colors.muted }]}
+                      numberOfLines={1}
+                    >
+                      {asset.selected
+                        ? formatPercent(asset.percentOfContribution)
+                        : 'Excluded'}
+                    </Text>
+                  </View>
+                </Pressable>
+              ))
+            )}
+
+            {sleeve.assets.length > 0 && sleeve.unallocated > 50 ? (
+              <Text style={[styles.sipSleeveNote, { color: colors.warning }]}>
+                {formatINR(sleeve.unallocated)} unassigned in this sleeve
+              </Text>
+            ) : null}
+          </View>
+        ))}
+
+        <View style={[styles.sipFooter, { borderTopColor: colors.border }]}>
+          <Text style={[styles.sipFooterText, { color: colors.muted }]}>
+            {sip.selectedCount}/{sip.availableCount} holdings selected
+          </Text>
+          <Text
+            style={[
+              styles.sipFooterText,
+              { color: hasUnallocated ? colors.warning : colors.positive },
+            ]}
+          >
+            {hasUnallocated
+              ? `${formatINR(sip.unallocated)} unassigned`
+              : 'Fully assigned'}
+          </Text>
+        </View>
+      </Card>
+      {hasUnallocated ? (
+        <SummaryNote
+          icon="alert-triangle"
+          text={`${formatINR(
+            sip.unallocated,
+          )} of this contribution has no selected holding. Pick one above, or add a holding to the sleeve.`}
+        />
+      ) : (
+        <Text style={[styles.cardNote, { color: colors.muted }]}>
+          Percentages are of the money you entered and exclude trim proceeds.
+        </Text>
+      )}
+    </View>
+  );
+}
+
 function ProjectionCard({
   plan,
   minCashPct,
@@ -1120,6 +1362,67 @@ const styles = StyleSheet.create({
     padding: space.lg,
   },
   emptyTradesText: { flex: 1, fontSize: 11.5, lineHeight: 17 },
+  sipCard: { overflow: 'hidden' },
+  sipSummary: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.md,
+    padding: space.md,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  sipSummaryText: { flex: 1, gap: 2 },
+  sipHint: { fontSize: 10.5, lineHeight: 15 },
+  sipSleeve: {
+    gap: space.xs,
+    paddingHorizontal: space.md,
+    paddingVertical: space.sm,
+  },
+  sipSleeveHeader: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
+  sipSleeveName: { flex: 1, fontSize: 12, fontWeight: '600' },
+  sipSleeveAmount: { fontSize: 12, fontWeight: '600' },
+  sipSleevePercent: { width: 52, fontSize: 11, textAlign: 'right' },
+  sipAsset: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.sm,
+    paddingVertical: 6,
+    paddingLeft: 6 + space.sm,
+  },
+  sipAssetExcluded: { opacity: 0.55 },
+  sipAssetPressed: { opacity: 0.7 },
+  sipCheck: {
+    width: 20,
+    height: 20,
+    borderRadius: 6,
+    borderWidth: 1.5,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sipAssetBody: { flex: 1, gap: 1 },
+  sipAssetName: { fontSize: 11.5, fontWeight: '500' },
+  sipAssetMeta: { fontSize: 9.5 },
+  sipAssetAmounts: { alignItems: 'flex-end', gap: 1 },
+  sipAssetAmount: { fontSize: 11.5, fontWeight: '600' },
+  sipAssetPercent: { fontSize: 9.5 },
+  sipSleeveNote: { fontSize: 9.5, paddingLeft: 6 + space.sm },
+  sipEmpty: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: space.sm,
+    paddingVertical: 2,
+    paddingLeft: 6 + space.sm,
+  },
+  sipEmptyText: { flex: 1, fontSize: 10, lineHeight: 15 },
+  sipFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: space.md,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    paddingVertical: space.sm,
+    paddingHorizontal: space.md,
+  },
+  sipFooterText: { fontSize: 10 },
   projectionCard: { gap: 0 },
   projectionRow: { gap: 3, paddingVertical: space.sm },
   projectionTop: { flexDirection: 'row', alignItems: 'center', gap: space.sm },

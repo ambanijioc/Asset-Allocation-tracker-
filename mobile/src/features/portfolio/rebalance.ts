@@ -40,7 +40,12 @@ export interface RebalanceProjectionRow {
   projectedStatus: PolicyStatus;
   currentValue: number;
   projectedValue: number;
+  /** Total money moving into the sleeve (new money + reinvested trim proceeds). */
   buyAmount: number;
+  /** Part of `buyAmount` funded by the contribution the user entered. */
+  contributionAmount: number;
+  /** Part of `buyAmount` funded by selling overweight sleeves. */
+  proceedsAmount: number;
   sellAmount: number;
 }
 
@@ -93,6 +98,8 @@ interface MutableRow {
   sleeve: PolicySleeveEvaluation;
   value: number;
   buy: number;
+  contribution: number;
+  proceeds: number;
   sell: number;
 }
 
@@ -129,26 +136,30 @@ function createRows(
   states: MutableRow[],
   total: number,
 ): RebalanceProjectionRow[] {
-  return states.map(({ sleeve, value, buy, sell }) => {
-    const projectedPercentage = total > 0 ? (value / total) * 100 : 0;
-    const projectedDriftPp = projectedPercentage - sleeve.targetPercentage;
-    return {
-      path: sleeve.path,
-      label: sleeve.label,
-      color: sleeve.color,
-      targetPercentage: sleeve.targetPercentage,
-      bandPp: sleeve.bandPp,
-      currentPercentage: sleeve.currentPercentage,
-      currentDriftPp: sleeve.driftPp,
-      projectedPercentage,
-      projectedDriftPp,
-      projectedStatus: statusForDrift(projectedDriftPp, sleeve.bandPp),
-      currentValue: sleeve.currentValue,
-      projectedValue: value,
-      buyAmount: buy,
-      sellAmount: sell,
-    };
-  });
+  return states.map(
+    ({ sleeve, value, buy, contribution, proceeds, sell }) => {
+      const projectedPercentage = total > 0 ? (value / total) * 100 : 0;
+      const projectedDriftPp = projectedPercentage - sleeve.targetPercentage;
+      return {
+        path: sleeve.path,
+        label: sleeve.label,
+        color: sleeve.color,
+        targetPercentage: sleeve.targetPercentage,
+        bandPp: sleeve.bandPp,
+        currentPercentage: sleeve.currentPercentage,
+        currentDriftPp: sleeve.driftPp,
+        projectedPercentage,
+        projectedDriftPp,
+        projectedStatus: statusForDrift(projectedDriftPp, sleeve.bandPp),
+        currentValue: sleeve.currentValue,
+        projectedValue: value,
+        buyAmount: buy,
+        contributionAmount: contribution,
+        proceedsAmount: proceeds,
+        sellAmount: sell,
+      };
+    },
+  );
 }
 
 function targetValue(sleeve: PolicySleeveEvaluation, total: number): number {
@@ -174,6 +185,7 @@ function fundDeficits(
   states: MutableRow[],
   total: number,
   amount: number,
+  source: 'contribution' | 'proceeds',
 ): number {
   let remaining = amount;
   for (const deficit of deficitsOf(states, total)) {
@@ -181,6 +193,8 @@ function fundDeficits(
     const allocation = Math.min(deficit.gap, remaining);
     deficit.state.value += allocation;
     deficit.state.buy += allocation;
+    if (source === 'contribution') deficit.state.contribution += allocation;
+    else deficit.state.proceeds += allocation;
     remaining -= allocation;
   }
   return Math.max(0, remaining);
@@ -212,6 +226,8 @@ export function planRebalance(input: RebalancePlanInput): RebalancePlan {
     sleeve,
     value: sleeve.currentValue,
     buy: 0,
+    contribution: 0,
+    proceeds: 0,
     sell: 0,
   }));
 
@@ -242,7 +258,7 @@ export function planRebalance(input: RebalancePlanInput): RebalancePlan {
   //    to target and money is still left, invest it by target weight.
   let remaining = contribution;
   if (remaining > 0.5) {
-    remaining = fundDeficits(states, afterTotal, remaining);
+    remaining = fundDeficits(states, afterTotal, remaining, 'contribution');
     if (remaining > 0.5) {
       const targetSum = states.reduce(
         (sum, state) => sum + Math.max(0, state.sleeve.targetPercentage),
@@ -253,6 +269,7 @@ export function planRebalance(input: RebalancePlanInput): RebalancePlan {
         const allocation = remaining * (state.sleeve.targetPercentage / targetSum);
         state.value += allocation;
         state.buy += allocation;
+        state.contribution += allocation;
       }
     }
   }
@@ -277,7 +294,7 @@ export function planRebalance(input: RebalancePlanInput): RebalancePlan {
       totalSell += excess;
     }
 
-    fundDeficits(states, afterTotal, totalSell);
+    fundDeficits(states, afterTotal, totalSell, 'proceeds');
 
     const cashState = states.find((state) => state.sleeve.path === 'Cash');
     if (cashState && cashFloor > targetValue(cashState.sleeve, afterTotal)) {
