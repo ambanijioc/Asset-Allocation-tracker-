@@ -19,12 +19,13 @@ export default function TabLayout() {
           backgroundColor: colors.card,
           borderTopColor: colors.border,
           borderTopWidth: 1,
-          height: 62 + insets.bottom,
-          paddingTop: 4,
-          paddingBottom: Math.max(insets.bottom, 4),
+          height: 64 + insets.bottom,
+          paddingTop: 5,
+          paddingBottom: Math.max(insets.bottom, 5),
         },
-        tabBarLabelStyle: { fontSize: 8.8, fontWeight: '600', letterSpacing: 0 },
+        tabBarLabelStyle: { fontSize: 10, fontWeight: '600', letterSpacing: 0 },
         tabBarItemStyle: { paddingVertical: 0 },
+        tabBarHideOnKeyboard: true,
         sceneStyle: { backgroundColor: colors.bg },
       }}
       screenListeners={{
@@ -36,9 +37,18 @@ export default function TabLayout() {
       <Tabs.Screen
         name="index"
         options={{
-          title: 'Home',
-          tabBarIcon: ({ color, focused }) => (
-            <Feather name="grid" size={21} color={color as string} />
+          title: 'Allocation',
+          tabBarIcon: ({ color }) => (
+            <Feather name="target" size={20} color={color as string} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="assets"
+        options={{
+          title: 'Holdings',
+          tabBarIcon: ({ color }) => (
+            <Feather name="layers" size={20} color={color as string} />
           ),
         }}
       />
@@ -47,40 +57,30 @@ export default function TabLayout() {
         options={{
           title: 'Insights',
           tabBarIcon: ({ color }) => (
-            <Feather name="bar-chart-2" size={21} color={color as string} />
+            <Feather name="bar-chart-2" size={20} color={color as string} />
           ),
         }}
       />
       <Tabs.Screen
-        name="allocation"
+        name="research"
         options={{
-          title: 'Allocation',
+          title: 'Research',
           tabBarIcon: ({ color }) => (
-            <Feather name="target" size={21} color={color as string} />
+            <Feather name="compass" size={20} color={color as string} />
           ),
-        }}
-      />
-      <Tabs.Screen
-        name="assets"
-        options={{
-          title: 'Assets',
-          tabBarIcon: ({ color }) => <Feather name="layers" size={21} color={color as string} />,
-        }}
-      />
-      <Tabs.Screen
-        name="screener"
-        options={{
-          title: 'Screener',
-          tabBarIcon: ({ color }) => <Feather name="filter" size={21} color={color as string} />,
         }}
       />
       <Tabs.Screen
         name="settings"
         options={{
           title: 'Settings',
-          tabBarIcon: ({ color }) => <Feather name="settings" size={21} color={color as string} />,
+          tabBarIcon: ({ color }) => (
+            <Feather name="settings" size={20} color={color as string} />
+          ),
         }}
       />
+      {/* Legacy allocation route: allocation is now the home screen. */}
+      <Tabs.Screen name="allocation" options={{ href: null }} />
     </Tabs>
   );
 }

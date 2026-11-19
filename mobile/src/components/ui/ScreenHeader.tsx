@@ -10,15 +10,25 @@ interface ScreenHeaderProps {
   subtitle?: string;
   /** Optional right-aligned control (icon button, avatar…). */
   action?: ReactNode;
+  /** Optional left-aligned control, used for back navigation on stack screens. */
+  leading?: ReactNode;
   /** Dashboard variant with a larger greeting. */
   size?: 'default' | 'large';
 }
 
-export function ScreenHeader({ title, eyebrow, subtitle, action, size = 'default' }: ScreenHeaderProps) {
+export function ScreenHeader({
+  title,
+  eyebrow,
+  subtitle,
+  action,
+  leading,
+  size = 'default',
+}: ScreenHeaderProps) {
   const { colors } = useTheme();
 
   return (
     <View style={styles.wrapper}>
+      {leading ? <View style={styles.leading}>{leading}</View> : null}
       <View style={styles.textColumn}>
         {eyebrow ? (
           <Text style={[type.label, { color: colors.muted }]} numberOfLines={1}>
@@ -58,5 +68,6 @@ const styles = StyleSheet.create({
     gap: space.md,
   },
   textColumn: { flex: 1 },
+  leading: { paddingTop: space.xs },
   action: { paddingTop: space.xs },
 });

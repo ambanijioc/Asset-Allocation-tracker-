@@ -81,8 +81,20 @@ export default function ScreenerScreen() {
   return (
     <Screen refreshing={isFetching && !isLoading} onRefresh={refetch}>
       <ScreenHeader
+        eyebrow="Research"
         title="Screener"
         subtitle="Filter Indian equities by size, valuation and yield"
+        leading={
+          <IconButton
+            icon="arrow-left"
+            onPress={() => {
+              if (router.canGoBack()) router.back();
+              else router.replace('/research');
+            }}
+            accessibilityLabel="Back to research"
+            variant="plain"
+          />
+        }
         action={
           <IconButton
             icon="refresh-cw"

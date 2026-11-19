@@ -46,7 +46,7 @@ export function policyStatusView(evaluation: PolicyEvaluation): PolicyStatusView
       };
     case 'breach':
       return {
-        badgeLabel: 'Drift',
+        badgeLabel: 'Breach',
         badgeTone: 'negative',
         headline: `${evaluation.breachCount} outside band`,
         hint: `${evaluation.inToleranceCount}/${evaluation.targetedCount} in tolerance`,

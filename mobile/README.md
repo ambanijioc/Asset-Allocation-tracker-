@@ -65,7 +65,8 @@ matters. The app's snapshot request allows 45 seconds for that wake-up.
 
 ```
 app/                      routes only
-  (tabs)/                 Dashboard · Insights · Allocation · Assets · Screener · Settings
+  (tabs)/                 Allocation (home) · Holdings · Insights · Research · Settings
+  screener.tsx            stock screener (opened from Research)
   asset/new.tsx           add holding (modal)
   asset/[id]/             detail + edit (modal)
   assistant.tsx           read-only AI chat + model picker (modal)
@@ -103,9 +104,10 @@ The **Insights** tab ports the web app's look-through engine
 - per-scheme mutual fund / ETF allocation with disclosed asset allocation,
   sector weights and underlying holdings.
 
-The **Allocation** tab turns the same engine's target-vs-current tree into a
-policy screen: drift monitor, rebalancing gaps and the full allocation tree,
-using the saved ideal allocation or the default 60/20/5/5/10 policy.
+The **Allocation** tab is the app's home. It leads with allocation health,
+drift and add/trim guidance, then shows portfolio value and P&L, the
+current-vs-target donut and the full allocation tree, using the saved ideal
+allocation or the default 60/20/5/5/10 policy.
 
 Fund data cached on the user snapshot is used first. Missing schemes are fetched
 lazily from `/api/holdings` and cached in TanStack Query for a day. The bundled
@@ -113,9 +115,8 @@ demo portfolio ships with sample scheme holdings so every chart renders offline.
 
 ### AI assistant
 
-The **Assistant** modal (opened from the dashboard header or the "Ask the
-assistant" card) runs a tool-calling loop against the backend proxy at
-`/api/agent`:
+The **Assistant** modal (opened from the Allocation header or the Research tab)
+runs a tool-calling loop against the backend proxy at `/api/agent`:
 
 1. the app sends the conversation, the selected provider/model and its Firebase
    ID token;

@@ -35,7 +35,7 @@ interface Section {
   data: Holding[];
 }
 
-export default function AssetsScreen() {
+export default function HoldingsScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { colors } = useTheme();
@@ -84,7 +84,7 @@ export default function AssetsScreen() {
   const listHeader = (
     <View style={styles.stack}>
       <ScreenHeader
-        title="Assets"
+        title="Holdings"
         subtitle={
           isDemo
             ? `${summary.assetCount} demo holdings`
@@ -95,7 +95,7 @@ export default function AssetsScreen() {
             <IconButton
               icon="plus"
               onPress={() => router.push('/asset/new')}
-              accessibilityLabel="Add asset"
+              accessibilityLabel="Add holding"
             />
           )
         }
@@ -119,7 +119,7 @@ export default function AssetsScreen() {
           selectionColor={colors.accent}
           autoCapitalize="none"
           autoCorrect={false}
-          accessibilityLabel="Search assets"
+          accessibilityLabel="Search holdings"
           style={[styles.searchInput, { color: colors.text }]}
         />
         {query.length > 0 ? (
@@ -157,7 +157,7 @@ export default function AssetsScreen() {
         {error ? (
           <Card>
             <ErrorState
-              message={error instanceof Error ? error.message : 'Could not load your assets.'}
+              message={error instanceof Error ? error.message : 'Could not load your holdings.'}
               onRetry={refetch}
             />
           </Card>
@@ -218,13 +218,13 @@ export default function AssetsScreen() {
           <Card>
             <EmptyState
               icon={summary.assetCount === 0 ? 'plus-circle' : 'search'}
-              title={summary.assetCount === 0 ? 'No assets yet' : 'No matches'}
+              title={summary.assetCount === 0 ? 'No holdings yet' : 'No matches'}
               message={
                 summary.assetCount === 0
                   ? 'Add your first holding to start tracking allocation and returns.'
                   : 'Try a different name, symbol or category filter.'
               }
-              actionLabel={summary.assetCount === 0 && !isDemo ? 'Add asset' : undefined}
+              actionLabel={summary.assetCount === 0 && !isDemo ? 'Add holding' : undefined}
               onAction={
                 summary.assetCount === 0 && !isDemo ? () => router.push('/asset/new') : undefined
               }
